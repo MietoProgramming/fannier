@@ -10,6 +10,7 @@ func help() {
     print("""
     Usage: fanctl <command>
       status          temps + fans + active profile (daemon first, else direct)
+      sensors         live per-sensor readings + hottest key per group
       profiles        profile names known to fanierd
       use <name>      switch active profile (via fanierd)
       manual <id> <rpm>   force RPM (via fanierd)
@@ -22,7 +23,8 @@ func help() {
 func statusLine(_ status: MachineStatus) -> String {
     var out: [String] = []
     for temp in status.temps {
-        out.append("\(temp.group): \(String(format: "%.1f", temp.maxC)) °C")
+        let source = temp.hotKey.map { " (source \($0))" } ?? ""
+        out.append("\(temp.group): \(String(format: "%.1f", temp.maxC)) °C\(source)")
     }
     for fan in status.fans {
         out.append("fan\(fan.id) '\(fan.name)': \(fan.actualRPM) rpm (min \(fan.minRPM), max \(fan.maxRPM), \(fan.automatic ? "auto" : "manual"))")
@@ -30,6 +32,13 @@ func statusLine(_ status: MachineStatus) -> String {
     if let p = status.activeProfile { out.append("profile: \(p)") }
     if status.manualOverride { out.append("manual override active") }
     return out.joined(separator: "\n")
+}
+
+func printSensorSource(_ source: SensorSource) {
+    print("\(source.group) — hottest \(source.hotKey) \(String(format: "%.1f", source.hotC)) °C (\(source.sensors.count) sensors)")
+    for reading in source.sensors {
+        print(String(format: "  %@ %.1f °C", reading.key, reading.tempC))
+    }
 }
 
 let client = DaemonClient()
@@ -46,10 +55,25 @@ case "status", nil:
                                    minRPM: $0.minRPM, maxRPM: $0.maxRPM, automatic: $0.automatic)
         }
         let temps = SensorGroup.allCases.compactMap { group -> MachineStatus.TempState? in
-            smc.maxTemperature(group: group).map { .init(group: group.rawValue, maxC: $0) }
+            guard let hot = smc.sensorReadings(group: group).first else { return nil }
+            return .init(group: group.rawValue, maxC: hot.tempC, hotKey: hot.key)
         }
         print(statusLine(MachineStatus(fans: fans, temps: temps, activeProfile: nil, manualOverride: false)))
         print("(fanierd not running)")
+    }
+case "sensors":
+    if let response = client.send(.sensors), let sources = response.sensors, !sources.isEmpty {
+        for source in sources { printSensorSource(source) }
+    } else {
+        guard let smc = try? SMCConnection() else { print("SMC unavailable"); exit(1) }
+        for group in SensorGroup.allCases {
+            let readings = smc.sensorReadings(group: group)
+            guard let hot = readings.first else { continue }
+            printSensorSource(SensorSource(
+                group: group.rawValue, hotKey: hot.key, hotC: hot.tempC,
+                sensors: readings.map { SensorReading(key: $0.key, tempC: $0.tempC) }
+            ))
+        }
     }
 case "profiles":
     guard let response = client.send(.profiles) else { print("fanierd offline"); exit(2) }

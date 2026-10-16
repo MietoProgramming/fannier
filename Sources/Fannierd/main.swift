@@ -119,6 +119,18 @@ do {
             return .okStatus(controller.currentStatus())
         case .profiles:
             return .okProfiles(controller.profileNames())
+        case .profilesDetail:
+            return .okProfilesDetail(controller.profileDetails())
+        case .sensors:
+            return .okSensors(controller.sensorSources())
+        case .setProfile(let profile):
+            switch controller.upsertProfile(profile) {
+            case .failure(let error): return .failure(error.message)
+            case .success(let clean): return .okProfile(clean)
+            }
+        case .deleteProfile(let name):
+            if let error = controller.deleteProfile(name) { return .failure(error) }
+            return .okEmpty()
         case .useProfile(let name):
             if let error = controller.useProfile(name) { return .failure(error) }
             return .okEmpty()

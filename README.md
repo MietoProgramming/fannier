@@ -33,7 +33,7 @@ Sources/Fannierd/      root LaunchDaemon: unix-socket JSON API + apply loop
 Sources/FannierApp/    menu bar app (temps in the bar, profiles in the menu)
 Sources/fanctl/        small CLI (status / use / manual / auto / read)
 Tests/FanCoreTests/    curve/hysteresis/clamping unit tests
-scripts/make-app.sh          package fannier.app + fannier-0.1.0.dmg (ad-hoc signed)
+scripts/make-app.sh          package fannier.app + fannier-0.2.0.dmg (ad-hoc signed)
 scripts/install-daemon.sh    app-bundle installer (no build): copies fanierd/fanctl,
                              bootstraps the root LaunchDaemon
 scripts/install-launchd.sh   dev install: builds release, installs, bootstraps
@@ -49,7 +49,7 @@ GUI falls back to `~/Library/Application Support/fannier`.
 ## Install as an app (recommended)
 
 ```sh
-./scripts/make-app.sh     # → build/fannier.app + build/fannier-0.1.0.dmg
+./scripts/make-app.sh     # → build/fannier.app + build/fannier-0.2.0.dmg
 open build/fannier.app    # or drag from the DMG into /Applications
 ```
 
@@ -66,6 +66,27 @@ The status bar shows the hottest CPU/GPU reading; the menu lists profile
 radio buttons (active one checked), current fan RPMs/min/max, and the
 install/restart item.
 
+## Profiles — on-screen editor (no JSON required)
+
+Menu bar icon → **Edit profiles…** (⌘E):
+
+- **Profile list** on the left — built-ins plus your own; add / Duplicate /
+  delete custom ones, the active profile is marked.
+- **Temperature source** per profile: CPU / GPU / Max(CPU,GPU) — plus the
+  live *source of temps*: the hottest SMC key of each group (e.g. `Tp0C`)
+  and a disclosure list of every sensor feeding the group.
+- **Curve editor** with any number of steps (°C → RPM): add, remove, sort;
+  live chart with a marker for the current input temperature and a
+  "now: 54.3 °C → 3800 rpm" readout of the resulting target.
+- **Advanced**: hysteresis (rewrite suppression) and emergency temperature
+  (kept ≤ 100 °C by validation).
+
+Saving goes through fanierd, which validates and clamps server-side; built-in
+profiles can be edited in place ("saving keeps the name") or saved under a
+new name, which creates a copy. `profiles.json` still lives in
+`/Library/Application Support/fannier/` for power users, but the editor is
+the primary interface.
+
 ## Build & run from source (dev)
 
 ```sh
@@ -78,6 +99,7 @@ CLI (`fanctl`) for quick checks and scripting:
 
 ```sh
 .build/debug/fanctl status        # temps + fans (daemon first, else direct SMC)
+.build/debug/fanctl sensors       # per-key temps + hottest ("source") per group
 .build/debug/fanctl read Tp0U     # raw SMC key
 .build/debug/fanctl use Performance    # via fanierd
 sudo .build/debug/fanctl manual 0 4000 # forced RPM (root + fanierd)
@@ -86,18 +108,22 @@ sudo .build/debug/fanctl manual 0 4000 # forced RPM (root + fanierd)
 
 ## Protocol (fanierd)
 
-JSON envelope `{"request": ...}` over `/var/run/fannier.sock`, one line in,
-one line out. Requests:
+JSON `{"cmd": …}` over `/var/run/fannier.sock`, one line in, one line out:
 
 | request | effect |
 |---|---|
-| `{"request":{"status":{}}}` | fans/temps/active profile |
-| `{"request":{"profiles":{}}}` | profile names |
-| `{"request":{"useProfile":"Performance"}}` | switch & apply |
-| `{"request":{"setManual":{"fan":0,"rpm":3500}}}` | forced RPM until resume |
-| `{"request":{"resumeAutomatic":{}}}` | back to macOS control |
+| `{"cmd":"status"}` | fans/temps/active profile (temps carry the hottest key per group) |
+| `{"cmd":"profiles"}` | profile names |
+| `{"cmd":"profilesDetail"}` | full profile definitions (editor) |
+| `{"cmd":"sensors"}` | per-sensor readings + hottest key per group |
+| `{"cmd":"use","name":"Performance"}` | switch & apply |
+| `{"cmd":"setProfile","profile":{…}}` | validate + save (upsert) a profile |
+| `{"cmd":"delProfile","name":"…"}` | delete a custom profile |
+| `{"cmd":"manual","fan":0,"rpm":3500}` | forced RPM until resume |
+| `{"cmd":"auto"}` | back to macOS control |
 
-(encoding via `DaemonRequest` Codable enum)
+(encoding via `DaemonRequest` Codable enum; `FANNIER_SOCKET` and
+`FANNIER_PROFILES_DIR` env vars override socket/config paths for testing)
 
 ## References
 

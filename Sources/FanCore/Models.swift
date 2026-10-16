@@ -115,10 +115,13 @@ public struct MachineStatus: Codable, Equatable, Sendable {
     public struct TempState: Codable, Equatable, Sendable {
         public var group: String
         public var maxC: Double
+        /// SMC key of the sensor that produced `maxC`, when known.
+        public var hotKey: String?
 
-        public init(group: String, maxC: Double) {
+        public init(group: String, maxC: Double, hotKey: String? = nil) {
             self.group = group
             self.maxC = maxC
+            self.hotKey = hotKey
         }
     }
 
@@ -138,14 +141,18 @@ public struct MachineStatus: Codable, Equatable, Sendable {
 public enum DaemonRequest: Equatable, Sendable {
     case status
     case profiles
+    case profilesDetail
+    case sensors
     case useProfile(String)
+    case setProfile(FanProfile)
+    case deleteProfile(String)
     case setManual(fan: Int, rpm: Int)
     case resumeAutomatic
 }
 
 extension DaemonRequest: Codable {
     private enum CodingKeys: String, CodingKey {
-        case cmd, name, fan, rpm
+        case cmd, name, fan, rpm, profile
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -153,8 +160,16 @@ extension DaemonRequest: Codable {
         switch self {
         case .status: try c.encode("status", forKey: .cmd)
         case .profiles: try c.encode("profiles", forKey: .cmd)
+        case .profilesDetail: try c.encode("profilesDetail", forKey: .cmd)
+        case .sensors: try c.encode("sensors", forKey: .cmd)
         case .useProfile(let name):
             try c.encode("use", forKey: .cmd)
+            try c.encode(name, forKey: .name)
+        case .setProfile(let profile):
+            try c.encode("setProfile", forKey: .cmd)
+            try c.encode(profile, forKey: .profile)
+        case .deleteProfile(let name):
+            try c.encode("delProfile", forKey: .cmd)
             try c.encode(name, forKey: .name)
         case .setManual(let fan, let rpm):
             try c.encode("manual", forKey: .cmd)
@@ -169,7 +184,11 @@ extension DaemonRequest: Codable {
         switch try c.decode(String.self, forKey: .cmd) {
         case "status": self = .status
         case "profiles": self = .profiles
+        case "profilesDetail": self = .profilesDetail
+        case "sensors": self = .sensors
         case "use": self = .useProfile(try c.decode(String.self, forKey: .name))
+        case "setProfile": self = .setProfile(try c.decode(FanProfile.self, forKey: .profile))
+        case "delProfile": self = .deleteProfile(try c.decode(String.self, forKey: .name))
         case "manual":
             self = .setManual(
                 fan: try c.decode(Int.self, forKey: .fan),
@@ -184,5 +203,33 @@ extension DaemonRequest: Codable {
                 )
             )
         }
+    }
+}
+
+/// One individual SMC temperature sensor reading.
+public struct SensorReading: Codable, Equatable, Sendable {
+    public var key: String
+    public var tempC: Double
+
+    public init(key: String, tempC: Double) {
+        self.key = key
+        self.tempC = tempC
+    }
+}
+
+/// All readings of one sensor group plus the hottest one (the "source" that
+/// currently drives Max(CPU,GPU) curves).
+public struct SensorSource: Codable, Equatable, Sendable {
+    public var group: String
+    public var hotKey: String
+    public var hotC: Double
+    /// Sorted hottest first.
+    public var sensors: [SensorReading]
+
+    public init(group: String, hotKey: String, hotC: Double, sensors: [SensorReading]) {
+        self.group = group
+        self.hotKey = hotKey
+        self.hotC = hotC
+        self.sensors = sensors
     }
 }

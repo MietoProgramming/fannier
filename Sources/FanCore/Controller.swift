@@ -28,9 +28,8 @@ public final class Controller {
             )
         }
         let temps: [MachineStatus.TempState] = SensorGroup.allCases.compactMap { group in
-            smc.maxTemperature(group: group).map {
-                MachineStatus.TempState(group: group.rawValue, maxC: $0)
-            }
+            guard let hot = smc.sensorReadings(group: group).first else { return nil }
+            return MachineStatus.TempState(group: group.rawValue, maxC: hot.tempC, hotKey: hot.key)
         }
         return MachineStatus(
             fans: fans,
@@ -52,6 +51,59 @@ public final class Controller {
     public func activeProfile() -> FanProfile? {
         guard let name = file.active ?? store.lastActiveFromState() else { return nil }
         return file.profiles.first { $0.name == name }
+    }
+
+    public func profileDetails() -> [FanProfile] { file.profiles }
+
+    /// Validate + persist a profile (GUI editor / CLI). Reapplies immediately
+    /// when the edited profile is the active one.
+    @discardableResult
+    public func upsertProfile(_ profile: FanProfile) -> Result<FanProfile, ProfileValidationError> {
+        switch ProfileValidator.sanitize(profile) {
+        case .failure(let error):
+            return .failure(error)
+        case .success(let clean):
+            if let index = file.profiles.firstIndex(where: { $0.name == clean.name }) {
+                file.profiles[index] = clean
+            } else {
+                file.profiles.append(clean)
+            }
+            try? store.save(file)
+            if activeProfileName() == clean.name { applyOnce(force: true) }
+            return .success(clean)
+        }
+    }
+
+    @discardableResult
+    public func deleteProfile(_ name: String) -> String? {
+        guard file.profiles.contains(where: { $0.name == name }) else {
+            return "no profile named \(name)"
+        }
+        file.profiles.removeAll { $0.name == name }
+        if file.active == name {
+            let fallback = file.profiles.first { $0.name == "Balanced" }?.name
+                ?? file.profiles.first?.name
+            file.active = fallback
+            store.saveLastActive(fallback)
+        }
+        try? store.save(file)
+        applyOnce(force: true)
+        return nil
+    }
+
+    /// Live per-key temperature readings per group (the editor's
+    /// "source of temps" display).
+    public func sensorSources() -> [SensorSource] {
+        SensorGroup.allCases.compactMap { group in
+            let readings = smc.sensorReadings(group: group)
+            guard let hot = readings.first else { return nil }
+            return SensorSource(
+                group: group.rawValue,
+                hotKey: hot.key,
+                hotC: hot.tempC,
+                sensors: readings.map { SensorReading(key: $0.key, tempC: $0.tempC) }
+            )
+        }
     }
 
     // MARK: - commands

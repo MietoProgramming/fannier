@@ -1,6 +1,7 @@
 import AppKit
 import FanCore
 import FanSMC
+import SwiftUI
 
 /// Menu bar app: live temps/fans are read directly via SMC (no privileges
 /// needed); profile switching and manual control go through fanierd.
@@ -13,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var daemonStatus: MachineStatus?
     private var knownProfiles: [String] = []
     private var store: ProfileStore?
+    private var editorWindow: NSWindow?
+    private var editorModel: ProfileEditorModel?
 
     private static let maxProfileSlots = 6
     private static let maxFanSlots = 4
@@ -53,6 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pollTimer.resume()
         timer = pollTimer
         refresh()
+        if ProcessInfo.processInfo.environment["FANNIER_OPEN_EDITOR"] == "1" {
+            openEditor()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -112,8 +118,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(.separator())
 
+        let editProfiles = NSMenuItem(
+            title: "Edit profiles…", action: #selector(openEditor), keyEquivalent: "e"
+        )
+        editProfiles.target = self
+        menu.addItem(editProfiles)
+
         let openConfig = NSMenuItem(
-            title: "Open profiles.json", action: #selector(openConfigFile), keyEquivalent: "o"
+            title: "Reveal profiles.json in Finder", action: #selector(openConfigFile), keyEquivalent: "o"
         )
         openConfig.target = self
         menu.addItem(openConfig)
@@ -206,7 +218,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let status = daemonStatus ?? readStatusDirect() {
             for temp in status.temps {
                 let names: [String: String] = ["cpu": "CPU", "gpu": "GPU"]
-                lines.append(String(format: "%@: %.1f °C", names[temp.group] ?? temp.group, temp.maxC))
+                let source = temp.hotKey.map { " (\($0))" } ?? ""
+                lines.append(String(format: "%@: %.1f °C%@", names[temp.group] ?? temp.group, temp.maxC, source))
             }
             if status.manualOverride {
                 lines.append("manual override active")
@@ -228,8 +241,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         guard !fans.isEmpty else { return nil }
         let temps: [MachineStatus.TempState] = SensorGroup.allCases.compactMap { group in
-            smc.maxTemperature(group: group)
-                .map { MachineStatus.TempState(group: group.rawValue, maxC: $0) }
+            guard let hot = smc.sensorReadings(group: group).first else { return nil }
+            return MachineStatus.TempState(group: group.rawValue, maxC: hot.tempC, hotKey: hot.key)
         }
         return MachineStatus(fans: fans, temps: temps, activeProfile: nil, manualOverride: false)
     }
@@ -250,6 +263,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openConfigFile() {
         let dir = usableStore().directory
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir.path)
+    }
+
+    @objc private func openEditor() {
+        if editorWindow == nil {
+            let model = ProfileEditorModel()
+            let hosting = NSHostingController(rootView: ProfileEditorView(model: model))
+            let window = NSWindow(contentViewController: hosting)
+            window.title = "fannier profiles"
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.setContentSize(NSSize(width: 860, height: 620))
+            window.minSize = NSSize(width: 760, height: 520)
+            window.isReleasedWhenClosed = false
+            window.delegate = self
+            editorModel = model
+            editorWindow = window
+        }
+        editorModel?.start()
+        NSApp.activate(ignoringOtherApps: true)
+        editorWindow?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func installDaemon() {
@@ -286,6 +318,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return String(bundle.dropLast("/build/fannier.app".count))
         }
         return nil
+    }
+}
+
+extension AppDelegate: NSWindowDelegate {
+    func windowWillClose(_ notification: Notification) {
+        if (notification.object as? NSWindow) === editorWindow {
+            editorModel?.stop()
+        }
     }
 }
 

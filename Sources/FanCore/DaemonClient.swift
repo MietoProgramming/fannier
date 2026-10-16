@@ -10,23 +10,53 @@ public enum DaemonProtocol {
         public var ok: Bool
         public var status: MachineStatus?
         public var profiles: [String]?
+        public var profilesDetail: [FanProfile]?
+        public var profile: FanProfile?
+        public var sensors: [SensorSource]?
         public var error: String?
         public var version: String?
 
+        public init(
+            ok: Bool, status: MachineStatus? = nil, profiles: [String]? = nil,
+            profilesDetail: [FanProfile]? = nil, profile: FanProfile? = nil,
+            sensors: [SensorSource]? = nil, error: String? = nil, version: String?
+        ) {
+            self.ok = ok
+            self.status = status
+            self.profiles = profiles
+            self.profilesDetail = profilesDetail
+            self.profile = profile
+            self.sensors = sensors
+            self.error = error
+            self.version = version
+        }
+
         public static func okStatus(_ status: MachineStatus) -> DaemonResponse {
-            .init(ok: true, status: status, profiles: nil, error: nil, version: DaemonProtocol.version)
+            .init(ok: true, status: status, version: DaemonProtocol.version)
         }
 
         public static func okProfiles(_ names: [String]) -> DaemonResponse {
-            .init(ok: true, status: nil, profiles: names, error: nil, version: DaemonProtocol.version)
+            .init(ok: true, profiles: names, version: DaemonProtocol.version)
+        }
+
+        public static func okProfilesDetail(_ list: [FanProfile]) -> DaemonResponse {
+            .init(ok: true, profilesDetail: list, version: DaemonProtocol.version)
+        }
+
+        public static func okProfile(_ profile: FanProfile) -> DaemonResponse {
+            .init(ok: true, profile: profile, version: DaemonProtocol.version)
+        }
+
+        public static func okSensors(_ sources: [SensorSource]) -> DaemonResponse {
+            .init(ok: true, sensors: sources, version: DaemonProtocol.version)
         }
 
         public static func okEmpty() -> DaemonResponse {
-            .init(ok: true, status: nil, profiles: nil, error: nil, version: DaemonProtocol.version)
+            .init(ok: true, version: DaemonProtocol.version)
         }
 
         public static func failure(_ message: String) -> DaemonResponse {
-            .init(ok: false, status: nil, profiles: nil, error: message, version: DaemonProtocol.version)
+            .init(ok: false, error: message, version: DaemonProtocol.version)
         }
     }
 
@@ -46,8 +76,10 @@ public enum DaemonProtocol {
 /// Blocking client used by the menu bar app and CLI.
 public struct DaemonClient {
     public var socketPath: String
-    public init(socketPath: String = DaemonProtocol.socketPath) {
+    public init(socketPath: String? = nil) {
         self.socketPath = socketPath
+            ?? ProcessInfo.processInfo.environment["FANNIER_SOCKET"]
+            ?? DaemonProtocol.socketPath
     }
 
     public func send(_ request: DaemonRequest, timeout: TimeInterval = 2.0) -> DaemonProtocol.DaemonResponse? {
