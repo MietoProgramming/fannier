@@ -141,3 +141,7 @@ JSON `{"cmd": …}` over `/var/run/fannier.sock`, one line in, one line out:
 
 (encoding via `DaemonRequest` Codable enum; `FANNIER_SOCKET` and
 `FANNIER_PROFILES_DIR` env vars override socket/config paths for testing)
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
