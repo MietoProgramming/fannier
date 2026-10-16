@@ -67,8 +67,9 @@ public struct DaemonClient {
         }
 
         let connectResult = withUnsafePointer(to: &addr) { p -> Int32 in
-            connect(fd, unsafeBitCast(p, to: UnsafePointer<sockaddr>.self),
-                    socklen_t(MemoryLayout<sockaddr_un>.size))
+            p.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                connect(fd, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
         }
         guard connectResult == 0 else { return nil }
 

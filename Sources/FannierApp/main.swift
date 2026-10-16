@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let client = DaemonClient()
     private var daemonStatus: MachineStatus?
     private var knownProfiles: [String] = []
+    private var store: ProfileStore?
 
     private static let maxProfileSlots = 6
     private static let maxFanSlots = 4
@@ -21,6 +22,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         smc = try? SMCConnection()
         super.init()
+        // /Library/Application Support/fannier is readable once the daemon
+        // installed it; per-user fallback covers pre-install use.
+        let shared = ProfileStore()
+        store = FileManager.default.isReadableFile(atPath: shared.fileLocation)
+            ? shared
+            : ProfileStore.userFallback()
+    }
+
+    private func usableStore() -> ProfileStore {
+        if let s = store,
+           FileManager.default.isReadableFile(atPath: s.fileLocation) {
+            return s
+        }
+        let fallback = ProfileStore.userFallback()
+        store = fallback
+        return fallback
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -231,13 +248,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openConfigFile() {
-        let dir = ProfileStore().directory
+        let dir = usableStore().directory
         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: dir.path)
     }
 
     @objc private func installDaemon() {
         let scriptPath: String
-        if let bundled = Bundle.main.path(forResource: "install-launchd", ofType: "sh") {
+        if let bundled = Bundle.main.path(forResource: "install-daemon", ofType: "sh") {
+            scriptPath = bundled
+        } else if let bundled = Bundle.main.path(forResource: "install-launchd", ofType: "sh") {
             scriptPath = bundled
         } else if let repoRoot = findRepoRoot() {
             scriptPath = repoRoot + "/scripts/install-launchd.sh"
@@ -245,7 +264,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             scriptPath = "scripts/install-launchd.sh"
         }
         let appleScript = """
-        do shell script "bash '\(scriptPath)' && sleep 1" with administrator privileges
+        do shell script "bash '\(scriptPath)'" with administrator privileges
         """
         var error: NSDictionary?
         NSAppleScript(source: appleScript)?.executeAndReturnError(&error)
@@ -260,7 +279,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func findRepoRoot() -> String? {
         let cwd = FileManager.default.currentDirectoryPath
-        return cwd.hasSuffix("/fannier") ? cwd : nil
+        if cwd.hasSuffix("/fannier") { return cwd }
+        // dev checkout: app bundle lives at <repo>/build/fannier.app
+        let bundle = Bundle.main.bundleURL.resolvingSymlinksInPath().path
+        if bundle.hasSuffix("/build/fannier.app") {
+            return String(bundle.dropLast("/build/fannier.app".count))
+        }
+        return nil
     }
 }
 

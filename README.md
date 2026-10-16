@@ -33,26 +33,46 @@ Sources/Fannierd/      root LaunchDaemon: unix-socket JSON API + apply loop
 Sources/FannierApp/    menu bar app (temps in the bar, profiles in the menu)
 Sources/fanctl/        small CLI (status / use / manual / auto / read)
 Tests/FanCoreTests/    curve/hysteresis/clamping unit tests
-scripts/install-launchd.sh   build release, install /usr/local/bin/fanierd,
-                             bootstrap LaunchDaemon with KeepAlive
+scripts/make-app.sh          package fannier.app + fannier-0.1.0.dmg (ad-hoc signed)
+scripts/install-daemon.sh    app-bundle installer (no build): copies fanierd/fanctl,
+                             bootstraps the root LaunchDaemon
+scripts/install-launchd.sh   dev install: builds release, installs, bootstraps
+scripts/make-icon.swift      renders the app .icns (fan glyph)
 ```
 
-Config lives in `~/Library/Application Support/fannier/profiles.json`
-(built-ins are re-merged on load, so deleting a built-in profile just
-restores it). `state.json` remembers the last active profile across reboots.
+Config lives in `/Library/Application Support/fannier/profiles.json`
+(daemon-owned; hand-editing needs `sudo`). Built-ins are re-merged on load,
+so deleting a built-in profile just restores it. `state.json` remembers the
+last active profile across reboots. Before the daemon is first installed the
+GUI falls back to `~/Library/Application Support/fannier`.
 
-## Build & install
+## Install as an app (recommended)
+
+```sh
+./scripts/make-app.sh     # → build/fannier.app + build/fannier-0.1.0.dmg
+open build/fannier.app    # or drag from the DMG into /Applications
+```
+
+First run: the menu bar fan icon appears (no Dock icon). Choose
+**“Install / restart fanierd (sudo)…”** once — it prompts for the admin
+password, copies the bundled `fanierd` + `fanctl` into `/usr/local/bin`,
+and bootstraps the KeepAlive root LaunchDaemon. Profile switching works
+immediately afterwards.
+
+The app is **ad-hoc signed** (fine for local use). Distributing it to other
+Macs requires a Developer ID signature + notarization.
+
+The status bar shows the hottest CPU/GPU reading; the menu lists profile
+radio buttons (active one checked), current fan RPMs/min/max, and the
+install/restart item.
+
+## Build & run from source (dev)
 
 ```sh
 swift build && swift test
-# one-time privileged install (prompts for admin password):
-./scripts/install-launchd.sh
+./scripts/install-launchd.sh   # one-time privileged install (builds first)
+.build/debug/fannier           # run the menu bar app
 ```
-
-Then launch the menu bar app: `.build/debug/fannier` (or make an .app bundle
-later). The status bar shows the hottest CPU/GPU reading; the menu lists
-profile radio buttons (active one checked), current fan RPMs/min/max, and an
-"Install / restart fanierd (sudo)" item when the daemon is missing.
 
 CLI (`fanctl`) for quick checks and scripting:
 

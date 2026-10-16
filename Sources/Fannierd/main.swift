@@ -30,8 +30,9 @@ final class DaemonServer {
         }
 
         let bindResult = withUnsafePointer(to: &addr) { p -> Int32 in
-            bind(listenFD, unsafeBitCast(p, to: UnsafePointer<sockaddr>.self),
-                 socklen_t(MemoryLayout<sockaddr_un>.size))
+            p.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+                bind(listenFD, sa, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
         }
         guard bindResult == 0 else {
             fatalError("bind failed: errno=\(errno)")

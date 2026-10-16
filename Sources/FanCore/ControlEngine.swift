@@ -37,7 +37,7 @@ public enum ControlEngine {
         guard let temp = input else { return nil }
 
         var rpm = targetRPM(profile: profile, tempC: temp) ?? fanMin
-        var emergency = temp >= profile.emergencyTempC
+        let emergency = temp >= profile.emergencyTempC
         if emergency { rpm = fanMax }
 
         rpm = max(fanMin, min(rpm, fanMax))

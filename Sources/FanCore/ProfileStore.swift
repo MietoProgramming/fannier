@@ -7,14 +7,29 @@ public final class ProfileStore {
     private let stateURL: URL
 
     public init(directory: URL? = nil) {
-        let base = directory
-            ?? FileManager.default
-                .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("fannier", isDirectory: true)
+        // order: explicit (CLI/daemon override) → FANNIER_PROFILES_DIR →
+        // shared /Library/Application Support/fannier (daemon-visible)
+        // → per-user Application Support fallback
+        let base: URL
+        if let directory {
+            base = directory
+        } else if let env = ProcessInfo.processInfo.environment["FANNIER_PROFILES_DIR"] {
+            base = URL(fileURLWithPath: env, isDirectory: true)
+        } else {
+            base = URL(fileURLWithPath: "/Library/Application Support/fannier", isDirectory: true)
+        }
         self.directory = base
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
         fileURL = base.appendingPathComponent("profiles.json")
         stateURL = base.appendingPathComponent("state.json")
+    }
+
+    /// Per-user store for the GUI when the shared dir is unreadable.
+    public static func userFallback() -> ProfileStore {
+        let base = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("fannier", isDirectory: true)
+        return ProfileStore(directory: base)
     }
 
     public struct ProfilesFile: Codable, Equatable, Sendable {
