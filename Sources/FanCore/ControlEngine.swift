@@ -10,6 +10,7 @@ public enum WriteGate {
     public static func shouldWrite(
         rpm: Int,
         lastTarget: Int?,
+        observedTarget: Int?,
         hysteresisRPM: Int,
         emergency: Bool,
         fanIsAutomatic: Bool,
@@ -21,6 +22,8 @@ public enum WriteGate {
         if force { return true }
         if fanIsAutomatic { return true } // macOS/SMC took control back
         guard let lastTarget else { return true } // never applied
+        guard let observedTarget else { return true } // target could not be read
+        if abs(observedTarget - rpm) > 50 { return true } // SMC lost or drifted from the requested target
         if emergency { return true }
         if abs(rpm - lastTarget) >= max(hysteresisRPM, 1) { return true }
         if let lastWriteAt, now.timeIntervalSince(lastWriteAt) >= heartbeat { return true }

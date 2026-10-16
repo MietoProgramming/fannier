@@ -202,10 +202,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if i < fans.count {
                 let fan = fans[i]
                 let mode = fan.automatic ? "auto" : "manual"
-                slot.title = String(
-                    format: "%@ — %d rpm  (min %d / max %d, %@)",
-                    fan.name, fan.actualRPM, fan.minRPM, fan.maxRPM, mode
-                )
+                let desired = fan.desiredRPM.map { "set \($0)" } ?? "set —"
+                let target = fan.targetRPM.map { "SMC \($0)" } ?? "SMC ?"
+                slot.title = "\(fan.name) — \(fan.actualRPM) rpm (\(desired), \(target), \(mode))"
+                slot.toolTip = fan.lastError
                 slot.isHidden = false
             } else {
                 slot.isHidden = true
@@ -251,12 +251,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func useProfile(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String else { return }
-        _ = client.send(.useProfile(name))
+        guard let response = client.send(.useProfile(name)) else {
+            showActivationError("fanierd is not running")
+            refresh()
+            return
+        }
+        if !response.ok { showActivationError(response.error ?? "Could not activate \(name)") }
         refresh()
     }
 
+    private func showActivationError(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = "Could not activate fan profile"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.runModal()
+    }
+
     @objc private func resumeAutomatic() {
-        _ = client.send(.resumeAutomatic)
+        guard let response = client.send(.resumeAutomatic) else {
+            showActivationError("fanierd is not running")
+            refresh()
+            return
+        }
+        if !response.ok { showActivationError(response.error ?? "Could not resume macOS automatic control") }
         refresh()
     }
 

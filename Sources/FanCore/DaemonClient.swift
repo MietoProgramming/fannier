@@ -55,8 +55,8 @@ public enum DaemonProtocol {
             .init(ok: true, version: DaemonProtocol.version)
         }
 
-        public static func failure(_ message: String) -> DaemonResponse {
-            .init(ok: false, error: message, version: DaemonProtocol.version)
+        public static func failure(_ message: String, profile: FanProfile? = nil) -> DaemonResponse {
+            .init(ok: false, profile: profile, error: message, version: DaemonProtocol.version)
         }
     }
 

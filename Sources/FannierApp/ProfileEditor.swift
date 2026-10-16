@@ -179,8 +179,12 @@ final class ProfileEditorModel: ObservableObject {
             return
         case .success(let clean):
             let response = client.send(.setProfile(clean))
-            guard let response, response.ok, let saved = response.profile else {
-                validationError = response?.error ?? "fanierd is not running"
+            guard let response else {
+                validationError = "fanierd is not running"
+                return
+            }
+            guard let saved = response.profile else {
+                validationError = response.error ?? "profile save failed"
                 return
             }
             // Renaming a custom profile: drop the old entry. Built-ins keep
@@ -188,8 +192,8 @@ final class ProfileEditorModel: ObservableObject {
             if let old = originalDraft?.name, old != saved.name, !builtinNames.contains(old) {
                 _ = client.send(.deleteProfile(old))
             }
-            validationError = nil
-            message = "saved"
+            validationError = response.ok ? nil : (response.error ?? "Could not activate the saved profile")
+            message = response.ok ? "saved" : nil
             selectedName = saved.name
             draft = saved
             originalDraft = saved
@@ -221,9 +225,11 @@ final class ProfileEditorModel: ObservableObject {
         }
         if response.ok {
             activeName = name
+            validationError = nil
             message = "active profile → \(name)"
         } else {
-            message = response.error
+            validationError = response.error ?? "Could not activate \(name)"
+            message = nil
         }
     }
 

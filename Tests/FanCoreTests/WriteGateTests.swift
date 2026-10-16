@@ -7,6 +7,7 @@ final class WriteGateTests: XCTestCase {
     private func gate(
         rpm: Int = 3_000,
         lastTarget: Int?,
+        observedTarget: Int? = 3_000,
         hysteresis: Int = 100,
         emergency: Bool = false,
         automatic: Bool = false,
@@ -17,6 +18,7 @@ final class WriteGateTests: XCTestCase {
         WriteGate.shouldWrite(
             rpm: rpm,
             lastTarget: lastTarget,
+            observedTarget: observedTarget,
             hysteresisRPM: hysteresis,
             emergency: emergency,
             fanIsAutomatic: automatic,
@@ -46,6 +48,19 @@ final class WriteGateTests: XCTestCase {
     func testWritesImmediatelyWhenFanFlippedBackToAutomatic() {
         // Even though the target is unchanged and the write was recent.
         XCTAssertTrue(gate(rpm: 3_000, lastTarget: 3_000, automatic: true, lastWriteAgo: 0.2))
+    }
+
+    func testWritesAgainWhenSMCZeroesTargetButKeepsManualMode() {
+        XCTAssertTrue(gate(rpm: 3_000, lastTarget: 3_000, observedTarget: 0, lastWriteAgo: 0.2))
+    }
+
+    func testWritesWhenReadbackDriftsBeyondToleranceEvenInsideHysteresis() {
+        XCTAssertTrue(gate(rpm: 3_051, lastTarget: 3_000, observedTarget: 3_000,
+                           hysteresis: 100, lastWriteAgo: 0.2))
+    }
+
+    func testWritesWhenTargetReadbackIsUnavailable() {
+        XCTAssertTrue(gate(rpm: 3_000, lastTarget: 3_000, observedTarget: nil, lastWriteAgo: 0.2))
     }
 
     func testEmergencyBypassesHysteresis() {

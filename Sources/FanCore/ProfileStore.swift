@@ -34,11 +34,23 @@ public final class ProfileStore {
 
     public struct ProfilesFile: Codable, Equatable, Sendable {
         public var active: String?
+        /// Distinguishes explicit automatic mode from legacy state.json fallback.
+        public var automaticMode: Bool
         public var profiles: [FanProfile]
 
-        public init(active: String?, profiles: [FanProfile]) {
+        public init(active: String?, automaticMode: Bool = false, profiles: [FanProfile]) {
             self.active = active
+            self.automaticMode = automaticMode
             self.profiles = profiles
+        }
+
+        private enum CodingKeys: String, CodingKey { case active, automaticMode, profiles }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            active = try container.decodeIfPresent(String.self, forKey: .active)
+            automaticMode = try container.decodeIfPresent(Bool.self, forKey: .automaticMode) ?? false
+            profiles = try container.decode([FanProfile].self, forKey: .profiles)
         }
     }
 

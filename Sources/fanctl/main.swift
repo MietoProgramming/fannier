@@ -27,6 +27,13 @@ func statusLine(_ status: MachineStatus) -> String {
         out.append("\(temp.group): \(String(format: "%.1f", temp.maxC)) °C\(source)")
     }
     for fan in status.fans {
+        let desired = fan.desiredRPM.map(String.init) ?? "—"
+        let target = fan.targetRPM.map(String.init) ?? "unavailable"
+        out.append("fan\(fan.id) requested \(desired) rpm, SMC target \(target) rpm")
+        if let lastConfirmedAt = fan.lastConfirmedAt {
+            out.append("  last confirmed: \(ISO8601DateFormatter().string(from: lastConfirmedAt))")
+        }
+        if let error = fan.lastError { out.append("  control error: \(error)") }
         out.append("fan\(fan.id) '\(fan.name)': \(fan.actualRPM) rpm (min \(fan.minRPM), max \(fan.maxRPM), \(fan.automatic ? "auto" : "manual"))")
     }
     if let p = status.activeProfile { out.append("profile: \(p)") }

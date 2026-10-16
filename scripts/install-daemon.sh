@@ -11,6 +11,11 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 
 [ -x "$DIR/fanierd" ] || { echo "fanierd binary missing next to this script" >&2; exit 1; }
 
+# Stop the current daemon before replacing its executable.
+if launchctl print system/${LABEL} >/dev/null 2>&1; then
+  launchctl bootout system/${LABEL}
+fi
+
 install -d -m 0755 /usr/local/bin
 install -m 0755 "$DIR/fanierd" /usr/local/bin/fanierd
 if [ -x "$DIR/fanctl" ]; then
@@ -38,8 +43,6 @@ cat >"$PLIST" <<PLIST_XML
 </plist>
 PLIST_XML
 
-launchctl bootout system/${LABEL} 2>/dev/null || true
 launchctl bootstrap system "${PLIST}"
-launchctl kickstart -k system/${LABEL}
 
 echo "fanierd installed (label ${LABEL}); profiles in /Library/Application Support/fannier"

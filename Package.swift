@@ -16,6 +16,6 @@ let package = Package(
         .executableTarget(name: "FannierApp", dependencies: ["FanCore"]),
         .executableTarget(name: "Fannierd", dependencies: ["FanCore"]),
         .executableTarget(name: "fanctl", dependencies: ["FanCore"]),
-        .testTarget(name: "FanCoreTests", dependencies: ["FanCore"]),
+        .testTarget(name: "FanCoreTests", dependencies: ["FanCore", "FanSMC"]),
     ]
 )

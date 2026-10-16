@@ -17,12 +17,14 @@ this project:
 - fanierd **restores macOS automatic control on SIGTERM/SIGINT/exit**,
 - profiles are clamped to the hardware min/max RPM read from the SMC,
 - a top "emergency" temperature (per profile) forces 100% RPM,
-- fanierd **keeps re-asserting the target** — a heartbeat (~2 s, `--heartbeat`
-  to tune) re-writes manual mode + RPM even when temperatures are stable, and
-  it re-asserts *immediately* when it reads a fan back in automatic mode. On
+- fanierd **reads back and re-asserts the target** — a 1 s control tick and
+  heartbeat (~2 s, `--heartbeat` to tune) re-writes manual mode and RPM when needed.
+  It also reasserts immediately when it reads a fan back in automatic mode or
+  when the SMC target differs from the requested RPM by more than 50 rpm. On
   Apple Silicon the SMC (`thermalmonitord`) flips fans back to automatic a few
   seconds after a single write, so a loop that only writes on temperature
   changes silently loses control; this is why fanierd is chatty on the SMC,
+- failed target read-back is shown in the menu and `fanctl status`,
 - when fanierd is not running nothing is written — the SMC returns to the
   macOS-controlled state on its own (there is no persistence of forced mode
   once nothing holds it… but fanierd *is* KeepAlive'd, so check
@@ -39,7 +41,7 @@ Sources/Fannierd/      root LaunchDaemon: unix-socket JSON API + apply loop
 Sources/FannierApp/    menu bar app (temps in the bar, profiles in the menu)
 Sources/fanctl/        small CLI (status / use / manual / auto / read)
 Tests/FanCoreTests/    curve/hysteresis/clamping unit tests
-scripts/make-app.sh          package fannier.app + fannier-0.2.0.dmg (ad-hoc signed)
+scripts/make-app.sh          package fannier.app + fannier-0.2.2.dmg (ad-hoc signed)
 scripts/install-daemon.sh    app-bundle installer (no build): copies fanierd/fanctl,
                              bootstraps the root LaunchDaemon
 scripts/install-launchd.sh   dev install: builds release, installs, bootstraps
@@ -49,13 +51,14 @@ scripts/make-icon.swift      renders the app .icns (fan glyph)
 Config lives in `/Library/Application Support/fannier/profiles.json`
 (daemon-owned; hand-editing needs `sudo`). Built-ins are re-merged on load,
 so deleting a built-in profile just restores it. `state.json` remembers the
-last active profile across reboots. Before the daemon is first installed the
+last active profile across reboots. macOS automatic mode is persisted separately
+and remains selected after daemon restarts. Before the daemon is first installed the
 GUI falls back to `~/Library/Application Support/fannier`.
 
 ## Install as an app (recommended)
 
 ```sh
-./scripts/make-app.sh     # → build/fannier.app + build/fannier-0.2.0.dmg
+./scripts/make-app.sh     # → build/fannier.app + build/fannier-0.2.2.dmg
 open build/fannier.app    # or drag from the DMG into /Applications
 ```
 

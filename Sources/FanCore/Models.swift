@@ -101,14 +101,26 @@ public struct MachineStatus: Codable, Equatable, Sendable {
         public var minRPM: Int
         public var maxRPM: Int
         public var automatic: Bool
+        public var desiredRPM: Int?
+        public var targetRPM: Int?
+        public var lastConfirmedAt: Date?
+        public var lastError: String?
 
-        public init(id: Int, name: String, actualRPM: Int, minRPM: Int, maxRPM: Int, automatic: Bool) {
+        public init(
+            id: Int, name: String, actualRPM: Int, minRPM: Int, maxRPM: Int,
+            automatic: Bool, desiredRPM: Int? = nil, targetRPM: Int? = nil,
+            lastConfirmedAt: Date? = nil, lastError: String? = nil
+        ) {
             self.id = id
             self.name = name
             self.actualRPM = actualRPM
             self.minRPM = minRPM
             self.maxRPM = maxRPM
             self.automatic = automatic
+            self.desiredRPM = desiredRPM
+            self.targetRPM = targetRPM
+            self.lastConfirmedAt = lastConfirmedAt
+            self.lastError = lastError
         }
     }
 

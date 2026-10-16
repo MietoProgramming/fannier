@@ -8,10 +8,15 @@ import FanSMC
 final class DaemonServer {
     private var listenFD: Int32 = -1
     private let handler: (DaemonRequest) -> DaemonProtocol.DaemonResponse
+    private let handlerQueue: DispatchQueue
     private var running = true
 
-    init(socketPath: String, handler: @escaping (DaemonRequest) -> DaemonProtocol.DaemonResponse) {
+    init(
+        socketPath: String, handlerQueue: DispatchQueue,
+        handler: @escaping (DaemonRequest) -> DaemonProtocol.DaemonResponse
+    ) {
         self.handler = handler
+        self.handlerQueue = handlerQueue
 
         unlink(socketPath)
         listenFD = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -45,11 +50,10 @@ final class DaemonServer {
 
     func run() {
         log("fannierd: accept loop starting")
-        let queue = DispatchQueue.global(qos: .userInitiated)
         while running {
             guard let fd = accept() else { break }
             log("fannierd: accepted connection fd=\(fd)")
-            queue.async { [handler] in
+            handlerQueue.async { [handler] in
                 guard let req = Self.readRequest(fd: fd) else {
                     log("fannierd: request decode failed")
                     close(fd); return
@@ -102,7 +106,7 @@ log("fannierd starting…")
 let args = Dictionary(
     uniqueKeysWithValues: zip(CommandLine.arguments, CommandLine.arguments.dropFirst())
 )
-let pollSeconds = Double(args["--poll"] ?? "") ?? 3.0
+let pollSeconds = Double(args["--poll"] ?? "") ?? 1.0
 let heartbeatSeconds = Double(args["--heartbeat"] ?? "") ?? 2.0
 let socketPath = args["--socket"] ?? DaemonProtocol.socketPath
 
@@ -110,11 +114,12 @@ do {
     let smc = try SMCConnection()
     let store = ProfileStore()
     let controller = Controller(smc: smc, store: store, heartbeat: heartbeatSeconds)
+    let controlQueue = DispatchQueue(label: "org.kamil.fannier.control", qos: .userInitiated)
     log("smc + profiles ready")
-    controller.applyOnce(force: true)
+    if let error = controller.applyOnce(force: true) { log("fanierd: initial apply failed: \(error)") }
     log("initial apply done")
 
-    let server = DaemonServer(socketPath: socketPath) { request in
+    let server = DaemonServer(socketPath: socketPath, handlerQueue: controlQueue) { request in
         switch request {
         case .status:
             return .okStatus(controller.currentStatus())
@@ -127,7 +132,11 @@ do {
         case .setProfile(let profile):
             switch controller.upsertProfile(profile) {
             case .failure(let error): return .failure(error.message)
-            case .success(let clean): return .okProfile(clean)
+            case .success(let outcome):
+                if let error = outcome.activationError {
+                    return .failure(error, profile: outcome.profile)
+                }
+                return .okProfile(outcome.profile)
             }
         case .deleteProfile(let name):
             if let error = controller.deleteProfile(name) { return .failure(error) }
@@ -145,7 +154,7 @@ do {
     }
     log("listening on \(socketPath), poll \(pollSeconds)s, heartbeat \(heartbeatSeconds)s")
 
-    let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+    let timer = DispatchSource.makeTimerSource(queue: controlQueue)
     timer.schedule(deadline: .now() + pollSeconds, repeating: pollSeconds)
     timer.setEventHandler { controller.applyOnce() }
     timer.resume()
@@ -158,7 +167,7 @@ do {
         let src = DispatchSource.makeSignalSource(signal: sig, queue: signalQueue)
         src.setEventHandler {
             timer.cancel()
-            controller.shutdownNow()
+            controlQueue.sync { controller.shutdownNow() }
             exit(0)
         }
         src.resume()

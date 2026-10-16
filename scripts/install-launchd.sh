@@ -14,6 +14,11 @@ echo "Building release binaries…" >&2
 swift build -c release >&2
 BIN_DIR="$(swift build -c release --show-bin-path)"
 
+# Stop the current daemon before replacing its executable.
+if launchctl print system/${LABEL} >/dev/null 2>&1; then
+  launchctl bootout system/${LABEL}
+fi
+
 install -d -m 0755 /usr/local/bin
 install -m 0755 "$BIN_DIR/fanierd" /usr/local/bin/fanierd
 if [ -x "$BIN_DIR/fanctl" ]; then
@@ -42,8 +47,6 @@ cat >"$PLIST" <<PLIST_XML
 </plist>
 PLIST_XML
 
-launchctl bootout system/${LABEL} 2>/dev/null || true
 launchctl bootstrap system "${PLIST}"
-launchctl kickstart -k system/${LABEL}
 
 echo "fanierd installed (label ${LABEL}); profiles in /Library/Application Support/fannier"
