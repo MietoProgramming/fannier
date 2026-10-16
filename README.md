@@ -4,9 +4,9 @@ Menu-bar fan control for Apple Silicon Macs with **temperature-driven, switchabl
 
 Monitors CPU/GPU die temperatures and fans via the SMC, and (through a tiny
 root daemon) forces fan targets according to the active profile curve.
-Developed and verified on MacBook Pro M5 Max / macOS 27 — the same SMC write
-path (`F<id>md` mode + `F<id>Tg` float target, no `Ftst` unlock) that
-exelban/stats uses on M5+ machines.
+Developed and verified on MacBook Pro M5 Max / macOS 27, using the SMC write
+path (`F<id>md` mode + `F<id>Tg` float target, no `Ftst` unlock) supported on
+M5+ machines.
 
 ## ⚠️ Safety
 
@@ -31,6 +31,14 @@ this project:
   `launchctl list | grep fanier` if you ever suspect a stuck manual mode).
 
 **Do not** set emergency temps above ~100 °C or remove the emergency branch.
+
+Install and use this software at your own risk. It can affect fan behavior and
+may cause overheating, hardware damage, or other loss. You are responsible for
+deciding whether it is suitable for your system and for monitoring it while in
+use. The software is provided “as is,” without warranties of any kind. To the
+fullest extent permitted by law, the author and contributors accept no
+liability for hardware damage or other loss arising from installing or using
+this software, or from being unable to use it.
 
 ## Layout
 
@@ -133,9 +141,3 @@ JSON `{"cmd": …}` over `/var/run/fannier.sock`, one line in, one line out:
 
 (encoding via `DaemonRequest` Codable enum; `FANNIER_SOCKET` and
 `FANNIER_PROFILES_DIR` env vars override socket/config paths for testing)
-
-## References
-
-- exelban/stats — `SMC/smc.swift` (MIT): Apple Silicon fan writes, M5+ path
-- narugit/smctemp (GPL-2.0): M1–M5 sensor key sets
-- beltex/SMCKit (MIT): canonical 80-byte `SMCParamStruct`
