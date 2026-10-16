@@ -1,5 +1,33 @@
 import Foundation
 
+/// Decides whether the controller should (re)write a fan target this tick.
+///
+/// On Apple Silicon the SMC (`thermalmonitord`) can flip a fan back to
+/// automatic mode a few seconds after a manual write, so "nothing changed"
+/// is not a reason to stay silent: the daemon re-asserts on a heartbeat and
+/// immediately when it reads a fan back in automatic mode.
+public enum WriteGate {
+    public static func shouldWrite(
+        rpm: Int,
+        lastTarget: Int?,
+        hysteresisRPM: Int,
+        emergency: Bool,
+        fanIsAutomatic: Bool,
+        lastWriteAt: Date?,
+        now: Date,
+        heartbeat: TimeInterval,
+        force: Bool
+    ) -> Bool {
+        if force { return true }
+        if fanIsAutomatic { return true } // macOS/SMC took control back
+        guard let lastTarget else { return true } // never applied
+        if emergency { return true }
+        if abs(rpm - lastTarget) >= max(hysteresisRPM, 1) { return true }
+        if let lastWriteAt, now.timeIntervalSince(lastWriteAt) >= heartbeat { return true }
+        return false
+    }
+}
+
 /// Pure temperature→RPM evaluation. No SMC access, fully unit-testable.
 public enum ControlEngine {
     /// Interpolate the profile curve for `tempC`.

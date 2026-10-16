@@ -17,6 +17,12 @@ this project:
 - fanierd **restores macOS automatic control on SIGTERM/SIGINT/exit**,
 - profiles are clamped to the hardware min/max RPM read from the SMC,
 - a top "emergency" temperature (per profile) forces 100% RPM,
+- fanierd **keeps re-asserting the target** — a heartbeat (~2 s, `--heartbeat`
+  to tune) re-writes manual mode + RPM even when temperatures are stable, and
+  it re-asserts *immediately* when it reads a fan back in automatic mode. On
+  Apple Silicon the SMC (`thermalmonitord`) flips fans back to automatic a few
+  seconds after a single write, so a loop that only writes on temperature
+  changes silently loses control; this is why fanierd is chatty on the SMC,
 - when fanierd is not running nothing is written — the SMC returns to the
   macOS-controlled state on its own (there is no persistence of forced mode
   once nothing holds it… but fanierd *is* KeepAlive'd, so check

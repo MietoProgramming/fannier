@@ -103,12 +103,13 @@ let args = Dictionary(
     uniqueKeysWithValues: zip(CommandLine.arguments, CommandLine.arguments.dropFirst())
 )
 let pollSeconds = Double(args["--poll"] ?? "") ?? 3.0
+let heartbeatSeconds = Double(args["--heartbeat"] ?? "") ?? 2.0
 let socketPath = args["--socket"] ?? DaemonProtocol.socketPath
 
 do {
     let smc = try SMCConnection()
     let store = ProfileStore()
-    let controller = Controller(smc: smc, store: store)
+    let controller = Controller(smc: smc, store: store, heartbeat: heartbeatSeconds)
     log("smc + profiles ready")
     controller.applyOnce(force: true)
     log("initial apply done")
@@ -142,7 +143,7 @@ do {
             return .okEmpty()
         }
     }
-    log("listening on \(socketPath), poll \(pollSeconds)s")
+    log("listening on \(socketPath), poll \(pollSeconds)s, heartbeat \(heartbeatSeconds)s")
 
     let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
     timer.schedule(deadline: .now() + pollSeconds, repeating: pollSeconds)

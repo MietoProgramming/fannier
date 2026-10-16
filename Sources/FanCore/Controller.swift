@@ -7,14 +7,20 @@ import FanSMC
 public final class Controller {
     private let smc: SMCConnection
     private let store: ProfileStore
+    /// See WriteGate: the Apple Silicon SMC can drop manual mode a few
+    /// seconds after a write — re-assert at least this often.
+    private let heartbeat: TimeInterval
 
     public private(set) var file: ProfileStore.ProfilesFile
     private var lastTargets: [Int: Int] = [:]
+    private var lastWriteAt: [Int: Date] = [:]
+    private var lastRevertLog: [Int: Date] = [:]
     private var manualFanRPM: [Int: Int] = [:]
 
-    public init(smc: SMCConnection, store: ProfileStore) {
+    public init(smc: SMCConnection, store: ProfileStore, heartbeat: TimeInterval = 2.0) {
         self.smc = smc
         self.store = store
+        self.heartbeat = heartbeat
         self.file = store.load()
     }
 
@@ -132,6 +138,7 @@ public final class Controller {
             try smc.setFanTargetRPM(fan, rpm: rpm)
             manualFanRPM[fan] = rpm
             lastTargets[fan] = rpm
+            lastWriteAt[fan] = Date()
             return nil
         } catch {
             return "SMC error: \(error)"
@@ -148,6 +155,7 @@ public final class Controller {
             }
         }
         lastTargets.removeAll()
+        lastWriteAt.removeAll()
         return firstError
     }
 
@@ -161,28 +169,67 @@ public final class Controller {
 
     // MARK: - loop step
 
-    /// One control step. `force` bypasses the profile-level hysteresis skip.
+    /// One control step. `force` bypasses hysteresis/heartbeat gating.
+    ///
+    /// Every tick also *reads* each fan's mode, so a fan the system flipped
+    /// back to automatic is re-asserted immediately (not only after the next
+    /// temperature change).
     public func applyOnce(force: Bool = false) {
-        guard manualFanRPM.isEmpty else { return } // manual wins until cleared
-        guard let profile = activeProfile() else { return }
+        let now = Date()
+        let fans = smc.allFans()
 
-        let cpu = smc.maxTemperature(group: .cpu)
-        let gpu = smc.maxTemperature(group: .gpu)
+        if manualFanRPM.isEmpty {
+            guard let profile = activeProfile() else { return }
+            let cpu = smc.maxTemperature(group: .cpu)
+            let gpu = smc.maxTemperature(group: .gpu)
 
-        for fan in smc.allFans() {
-            let last = lastTargets[fan.id]
-            guard let decision = ControlEngine.command(
-                profile: profile, cpuTemp: cpu, gpuTemp: gpu,
-                fanMin: fan.minRPM, fanMax: fan.maxRPM, lastTarget: last
-            ) else { continue }
-            if !force, decision.rpm == last { continue }
-            do {
-                try smc.forceFanMode(fan.id)
-                try smc.setFanTargetRPM(fan.id, rpm: decision.rpm)
-                lastTargets[fan.id] = decision.rpm
-            } catch {
-                FileHandle.standardError.write(Data("fannierd: \(error)\n".utf8))
+            for fan in fans {
+                guard let decision = ControlEngine.command(
+                    profile: profile, cpuTemp: cpu, gpuTemp: gpu,
+                    fanMin: fan.minRPM, fanMax: fan.maxRPM, lastTarget: nil
+                ) else { continue }
+                guard WriteGate.shouldWrite(
+                    rpm: decision.rpm, lastTarget: lastTargets[fan.id],
+                    hysteresisRPM: profile.hysteresisRPM, emergency: decision.emergency,
+                    fanIsAutomatic: fan.automatic, lastWriteAt: lastWriteAt[fan.id],
+                    now: now, heartbeat: heartbeat, force: force
+                ) else { continue }
+                writeTarget(fan: fan, rpm: decision.rpm, now: now)
+            }
+        } else {
+            // Manual override: same re-assert rules (the system also takes
+            // manual fans back after a while).
+            for fan in fans {
+                guard let target = manualFanRPM[fan.id] else { continue }
+                guard WriteGate.shouldWrite(
+                    rpm: target, lastTarget: lastTargets[fan.id],
+                    hysteresisRPM: 0, emergency: false,
+                    fanIsAutomatic: fan.automatic, lastWriteAt: lastWriteAt[fan.id],
+                    now: now, heartbeat: heartbeat, force: force
+                ) else { continue }
+                writeTarget(fan: fan, rpm: target, now: now)
             }
         }
+    }
+
+    private func writeTarget(fan: Fan, rpm: Int, now: Date) {
+        let wasForcedBefore = lastTargets[fan.id] != nil
+        do {
+            try smc.forceFanMode(fan.id)
+            try smc.setFanTargetRPM(fan.id, rpm: rpm)
+            lastTargets[fan.id] = rpm
+            lastWriteAt[fan.id] = now
+            if fan.automatic, wasForcedBefore {
+                if let last = lastRevertLog[fan.id], now.timeIntervalSince(last) < 60 { return }
+                lastRevertLog[fan.id] = now
+                logLine("fanierd: fan\(fan.id) had reverted to automatic — re-asserting manual mode")
+            }
+        } catch {
+            logLine("fanierd: \(error)")
+        }
+    }
+
+    private func logLine(_ line: String) {
+        FileHandle.standardError.write(Data((line + "\n").utf8))
     }
 }
