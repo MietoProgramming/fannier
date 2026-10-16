@@ -28,6 +28,21 @@ final class ControllerTests: XCTestCase {
         XCTAssertEqual(hardware.modeWriteCount, modeWritesBefore)
     }
 
+    func testDelayedTargetReadbackDoesNotRewriteManualMode() throws {
+        let (controller, hardware, store) = makeController()
+        defer { try? FileManager.default.removeItem(at: store.directory) }
+        hardware.staleTargetReadsAfterWrite = 3
+
+        XCTAssertNil(controller.useProfile("Performance"))
+
+        XCTAssertEqual(hardware.modeWriteCount, 2, "write manual mode only once per fan while the target settles")
+        XCTAssertEqual(hardware.targetWriteCount, 2)
+        for id in 0 ..< 2 {
+            XCTAssertEqual(hardware.fan(id)?.targetRPM, 4_400)
+            XCTAssertNotNil(controller.currentStatus().fans[id].lastConfirmedAt)
+        }
+    }
+
     func testSilentZeroTargetReadbackFailsActivationAndIsReported() throws {
         let (controller, hardware, store) = makeController()
         defer { try? FileManager.default.removeItem(at: store.directory) }
@@ -117,8 +132,11 @@ final class ControllerTests: XCTestCase {
 private final class MockFanHardware: FanControlHardware {
     private(set) var fans: [Int: Fan] = [:]
     private(set) var modeWriteCount = 0
+    private(set) var targetWriteCount = 0
     var failingFanIDs: Set<Int> = []
     var discardTargetWrites = false
+    var staleTargetReadsAfterWrite = 0
+    private var pendingTargets: [Int: (rpm: Int, staleReadsRemaining: Int)] = [:]
 
     init() {
         for id in 0 ..< 2 {
@@ -130,7 +148,17 @@ private final class MockFanHardware: FanControlHardware {
     }
 
     func fanCount() -> Int { fans.count }
-    func fan(_ id: Int) -> Fan? { fans[id] }
+    func fan(_ id: Int) -> Fan? {
+        if let pending = pendingTargets[id] {
+            if pending.staleReadsRemaining == 0 {
+                setTargetForTesting(pending.rpm, fan: id)
+                pendingTargets.removeValue(forKey: id)
+            } else {
+                pendingTargets[id] = (pending.rpm, pending.staleReadsRemaining - 1)
+            }
+        }
+        return fans[id]
+    }
     func allFans() -> [Fan] { fans.values.sorted { $0.id < $1.id } }
     func maxTemperature(group: SensorGroup) -> Double? { group == .cpu ? 50 : 40 }
     func sensorReadings(group: SensorGroup) -> [(key: String, tempC: Double)] {
@@ -151,10 +179,14 @@ private final class MockFanHardware: FanControlHardware {
     }
 
     func setFanTargetRPM(_ id: Int, rpm: Int) throws {
-        guard !failingFanIDs.contains(id), let fan = fans[id] else { throw MockError.writeFailed }
-        let target = discardTargetWrites ? fan.targetRPM : rpm
-        fans[id] = Fan(id: id, name: fan.name, minRPM: fan.minRPM, maxRPM: fan.maxRPM,
-                       actualRPM: fan.actualRPM, targetRPM: target, automatic: fan.automatic)
+        guard !failingFanIDs.contains(id), fans[id] != nil else { throw MockError.writeFailed }
+        targetWriteCount += 1
+        guard !discardTargetWrites else { return }
+        if staleTargetReadsAfterWrite > 0 {
+            pendingTargets[id] = (rpm, staleTargetReadsAfterWrite)
+        } else {
+            setTargetForTesting(rpm, fan: id)
+        }
     }
 
     func setTargetForTesting(_ rpm: Int, fan id: Int) {

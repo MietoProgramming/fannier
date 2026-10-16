@@ -286,36 +286,70 @@ public final class Controller {
     private func writeAndConfirm(fan: Fan, rpm: Int, forceMode: Bool) -> String? {
         desiredTargets[fan.id] = rpm
         let hadConfirmedTarget = lastTargets[fan.id] != nil
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        var verificationTrace: [String] = []
         var observedMode = fan.automatic
         var observedTarget = fan.targetRPM
+        var modeNeedsForce = forceMode || observedMode
         var lastError: String?
 
         for attempt in 0 ..< 3 {
             do {
-                if forceMode || observedMode { try smc.forceFanMode(fan.id) }
+                // Some SMC firmware applies F*Tg asynchronously. Rewriting the
+                // mode while that write is settling can restart the transition
+                // and leave the target at its previous value (observed on M5).
+                if modeNeedsForce || observedMode {
+                    try smc.forceFanMode(fan.id)
+                    modeNeedsForce = false
+                    observedMode = false
+                    verificationTrace.append("try\(attempt + 1):mode-write-ok@\(Self.elapsedMilliseconds(since: startedAt))ms")
+                }
                 try smc.setFanTargetRPM(fan.id, rpm: rpm)
-                guard let readBack = smc.fan(fan.id) else {
-                    throw FanControlError.readBackUnavailable(fan: fan.id, requested: rpm)
-                }
-                observedMode = readBack.automatic
-                observedTarget = readBack.targetRPM
-                if !observedMode, let target = observedTarget, abs(target - rpm) <= 50 {
-                    let now = Date()
-                    lastTargets[fan.id] = rpm
-                    lastWriteAt[fan.id] = now
-                    confirmedAt[fan.id] = now
-                    fanErrors.removeValue(forKey: fan.id)
-                    if fan.automatic, hadConfirmedTarget {
-                        logThrottled("fan\(fan.id) had reverted to automatic — re-asserting manual mode", fan: fan.id, now: now)
+                verificationTrace.append("try\(attempt + 1):target-write-ok@\(Self.elapsedMilliseconds(since: startedAt))ms")
+
+                // Keep the mode and target writes separate from the read-back
+                // polling. On M5, F*Tg stayed at the old value for ~100 ms and
+                // reflected the new target at ~150 ms; the actual RPM then
+                // converged over the next few hundred milliseconds.
+                for poll in 0 ..< 4 {
+                    guard let readBack = smc.fan(fan.id) else {
+                        lastError = "read-back unavailable after requesting \(rpm) rpm"
+                        break
                     }
-                    return nil
+                    observedMode = readBack.automatic
+                    observedTarget = readBack.targetRPM
+                    verificationTrace.append(
+                        "try\(attempt + 1).\(poll + 1)@\(Self.elapsedMilliseconds(since: startedAt))ms=" +
+                        "mode:\(observedMode ? "auto" : "manual"),target:\(observedTarget.map(String.init) ?? "unavailable"),actual:\(readBack.actualRPM)"
+                    )
+                    if !observedMode, let target = observedTarget, abs(target - rpm) <= 50 {
+                        let now = Date()
+                        lastTargets[fan.id] = rpm
+                        lastWriteAt[fan.id] = now
+                        confirmedAt[fan.id] = now
+                        fanErrors.removeValue(forKey: fan.id)
+                        if fan.automatic, hadConfirmedTarget {
+                            logThrottled("fan\(fan.id) had reverted to automatic — re-asserting manual mode", fan: fan.id, now: now)
+                        }
+                        return nil
+                    }
+
+                    if observedMode {
+                        modeNeedsForce = true
+                        lastError = "requested \(rpm) rpm; read back mode=auto, target=\(observedTarget.map(String.init) ?? "unavailable") rpm"
+                        break
+                    }
+
+                    lastError = "requested \(rpm) rpm; read back mode=manual, target=\(observedTarget.map(String.init) ?? "unavailable") rpm"
+                    if poll < 3 { Thread.sleep(forTimeInterval: 0.05) }
                 }
-                lastError = "requested \(rpm) rpm; read back mode=\(observedMode ? "auto" : "manual"), target=\(observedTarget.map(String.init) ?? "unavailable") rpm"
             } catch {
                 lastError = "write/read-back failed: \(error)"
+                verificationTrace.append("try\(attempt + 1):error=\(error)")
                 if let readBack = smc.fan(fan.id) {
                     observedMode = readBack.automatic
                     observedTarget = readBack.targetRPM
+                    modeNeedsForce = observedMode
                 }
             }
             if attempt < 2 { Thread.sleep(forTimeInterval: 0.05) }
@@ -323,8 +357,12 @@ public final class Controller {
 
         let message = "fan\(fan.id): could not confirm \(rpm) rpm after 3 attempts (read back \(observedTarget.map(String.init) ?? "unavailable") rpm, mode \(observedMode ? "auto" : "manual")); \(lastError ?? "unknown error")"
         fanErrors[fan.id] = message
-        logThrottled(message, fan: fan.id, now: Date())
+        logThrottled("\(message); trace=[\(verificationTrace.joined(separator: "; "))]", fan: fan.id, now: Date())
         return message
+    }
+
+    private static func elapsedMilliseconds(since start: TimeInterval) -> Int {
+        Int((ProcessInfo.processInfo.systemUptime - start) * 1_000)
     }
 
     private func logThrottled(_ line: String, fan: Int, now: Date) {
