@@ -31,7 +31,7 @@ final class ControllerTests: XCTestCase {
     func testDelayedTargetReadbackDoesNotRewriteManualMode() throws {
         let (controller, hardware, store) = makeController()
         defer { try? FileManager.default.removeItem(at: store.directory) }
-        hardware.staleTargetReadsAfterWrite = 3
+        hardware.staleTargetReadsAfterWrite = 6
 
         XCTAssertNil(controller.useProfile("Performance"))
 

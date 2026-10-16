@@ -23,6 +23,26 @@ public struct Fan: Sendable, Equatable {
     }
 }
 
+enum FanTargetEncoder {
+    static func encode(type: String, rpm: Int) throws -> [UInt8] {
+        switch type {
+        case "flt ":
+            let bits = Float(rpm).bitPattern
+            return (0 ..< 4).map { byte in
+                UInt8(truncatingIfNeeded: bits >> UInt32(byte * 8))
+            }
+        case "fpe2":
+            guard rpm > 0, rpm <= 16_383 else {
+                throw SMCError(operation: "target", key: "F*Tg", kernelReturn: kIOReturnBadArgument, smcResult: nil)
+            }
+            let fixedPoint = rpm << 2
+            return [UInt8(truncatingIfNeeded: fixedPoint >> 8), UInt8(truncatingIfNeeded: fixedPoint)]
+        default:
+            throw SMCError(operation: "target", key: "F*Tg", kernelReturn: kIOReturnUnsupported, smcResult: nil)
+        }
+    }
+}
+
 extension SMCConnection {
     // Fan keys: F<id>Ac actual, F<id>Mn min, F<id>Mx max, F<id>Tg target,
     // F<id>md/<lowercase on Apple Silicon> mode (0=auto, 1=forced), FNum count.
@@ -109,18 +129,7 @@ extension SMCConnection {
         guard let type = keyInfo("F\(id)Tg")?.type else {
             throw SMCError(operation: "target", key: "F\(id)Tg", kernelReturn: kIOReturnNotFound, smcResult: nil)
         }
-        let bytes: [UInt8]
-        switch type {
-        case "flt ":
-            bytes = Array(withUnsafeBytes(of: Float(rpm)) { $0 })
-        case "fpe2":
-            guard rpm <= 16383 else {
-                throw SMCError(operation: "target", key: "F\(id)Tg", kernelReturn: kIOReturnBadArgument, smcResult: nil)
-            }
-            bytes = [UInt8(rpm >> 6), UInt8((rpm << 2) ^ ((rpm >> 6) << 8))]
-        default:
-            throw SMCError(operation: "target", key: "F\(id)Tg", kernelReturn: kIOReturnUnsupported, smcResult: nil)
-        }
+        let bytes = try FanTargetEncoder.encode(type: type, rpm: rpm)
         try guardedRetry {
             try write("F\(id)Tg", bytes: bytes, size: bytes.count)
         }

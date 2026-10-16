@@ -14,6 +14,9 @@ public struct ProfileUpsertOutcome: Sendable {
 /// Owns the SMC connection, the profile loop, and manual overrides.
 /// All calls must be serialized by the daemon's control queue.
 public final class Controller {
+    private static let targetReadbackPollCount = 7
+    private static let targetReadbackPollInterval: TimeInterval = 0.05
+
     private let smc: FanControlHardware
     private let store: ProfileStore
     private let heartbeat: TimeInterval
@@ -307,11 +310,11 @@ public final class Controller {
                 try smc.setFanTargetRPM(fan.id, rpm: rpm)
                 verificationTrace.append("try\(attempt + 1):target-write-ok@\(Self.elapsedMilliseconds(since: startedAt))ms")
 
-                // Keep the mode and target writes separate from the read-back
-                // polling. On M5, F*Tg stayed at the old value for ~100 ms and
-                // reflected the new target at ~150 ms; the actual RPM then
-                // converged over the next few hundred milliseconds.
-                for poll in 0 ..< 4 {
+                // F*Tg is applied asynchronously on this M5: read-back can stay
+                // stale for 160–210 ms. Rewriting sooner can restart that
+                // transition, so allow ~300 ms for the target to settle before
+                // starting another full attempt.
+                for poll in 0 ..< Self.targetReadbackPollCount {
                     guard let readBack = smc.fan(fan.id) else {
                         lastError = "read-back unavailable after requesting \(rpm) rpm"
                         break
@@ -341,7 +344,9 @@ public final class Controller {
                     }
 
                     lastError = "requested \(rpm) rpm; read back mode=manual, target=\(observedTarget.map(String.init) ?? "unavailable") rpm"
-                    if poll < 3 { Thread.sleep(forTimeInterval: 0.05) }
+                    if poll < Self.targetReadbackPollCount - 1 {
+                        Thread.sleep(forTimeInterval: Self.targetReadbackPollInterval)
+                    }
                 }
             } catch {
                 lastError = "write/read-back failed: \(error)"
