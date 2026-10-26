@@ -1,6 +1,7 @@
 import AppKit
 import FanCore
 import FanSMC
+import ServiceManagement
 import SwiftUI
 
 /// Menu bar app: live temps/fans are read directly via SMC (no privileges
@@ -21,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let maxFanSlots = 4
     private static let profileSlotBase = 1_000
     private static let fanSlotBase = 2_000
+    private static let loginItemTag = 3_000
 
     override init() {
         smc = try? SMCConnection()
@@ -124,6 +126,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editProfiles.target = self
         menu.addItem(editProfiles)
 
+        let loginItem = NSMenuItem(
+            title: "Open at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: ""
+        )
+        loginItem.target = self
+        loginItem.tag = Self.loginItemTag
+        menu.addItem(loginItem)
+
+        let diagnostics = NSMenuItem(
+            title: "Hardware diagnostics…", action: #selector(showHardwareDiagnostics), keyEquivalent: ""
+        )
+        diagnostics.target = self
+        menu.addItem(diagnostics)
+
         let openConfig = NSMenuItem(
             title: "Reveal profiles.json in Finder", action: #selector(openConfigFile), keyEquivalent: "o"
         )
@@ -211,6 +226,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 slot.isHidden = true
             }
         }
+
+        if let loginItem = menu.item(withTag: Self.loginItemTag) {
+            switch SMAppService.mainApp.status {
+            case .enabled:
+                loginItem.title = "Open at Login"
+                loginItem.state = .on
+                loginItem.isEnabled = true
+            case .requiresApproval:
+                loginItem.title = "Open at Login (approval needed)…"
+                loginItem.state = .mixed
+                loginItem.isEnabled = true
+            case .notRegistered:
+                loginItem.title = "Open at Login"
+                loginItem.state = .off
+                loginItem.isEnabled = true
+            case .notFound:
+                loginItem.title = "Open at Login (run from app bundle)"
+                loginItem.state = .off
+                loginItem.isEnabled = false
+            @unknown default:
+                loginItem.title = "Open at Login (status unavailable)"
+                loginItem.state = .off
+                loginItem.isEnabled = false
+            }
+        }
     }
 
     private func hudText() -> String {
@@ -276,6 +316,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if !response.ok { showActivationError(response.error ?? "Could not resume macOS automatic control") }
         refresh()
+    }
+
+    @objc private func showHardwareDiagnostics() {
+        let alert = NSAlert()
+        alert.messageText = "Hardware diagnostics"
+        alert.alertStyle = .informational
+        guard let smc else {
+            alert.informativeText = "The AppleSMC connection is unavailable. No hardware changes were made."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
+
+        let report = smc.hardwareDiagnostics().formattedText
+        alert.informativeText = "This report only reads AppleSMC. Detected keys do not prove that writes will succeed."
+        let reportView = NSTextView(frame: NSRect(x: 0, y: 0, width: 480, height: 260))
+        reportView.isEditable = false
+        reportView.isSelectable = true
+        reportView.font = .monospacedSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
+        reportView.string = report
+        let scrollView = NSScrollView(frame: reportView.frame)
+        scrollView.hasVerticalScroller = true
+        scrollView.documentView = reportView
+        alert.accessoryView = scrollView
+        alert.addButton(withTitle: "Copy Report")
+        alert.addButton(withTitle: "Close")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(report, forType: .string)
+        }
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        let service = SMAppService.mainApp
+        do {
+            switch service.status {
+            case .enabled:
+                try service.unregister()
+            case .notRegistered:
+                try service.register()
+            case .requiresApproval:
+                openLoginItemsForApproval()
+                return
+            case .notFound:
+                showActivationError("Launch at Login is available when fannier runs from an installed .app bundle.")
+                return
+            @unknown default:
+                showActivationError("macOS returned an unrecognized Login Item status.")
+                return
+            }
+        } catch {
+            showActivationError("Could not update Launch at Login: \(error.localizedDescription)")
+        }
+
+        if service.status == .requiresApproval {
+            openLoginItemsForApproval()
+        }
+        updateMenuItems()
+    }
+
+    private func openLoginItemsForApproval() {
+        let alert = NSAlert()
+        alert.messageText = "Approve fannier in Login Items"
+        alert.informativeText = "macOS registered fannier but requires your approval in System Settings → General → Login Items."
+        alert.addButton(withTitle: "Open Login Items")
+        alert.addButton(withTitle: "Later")
+        if alert.runModal() == .alertFirstButtonReturn {
+            SMAppService.openSystemSettingsLoginItems()
+        }
     }
 
     @objc private func openConfigFile() {

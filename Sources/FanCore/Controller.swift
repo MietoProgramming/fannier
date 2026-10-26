@@ -229,21 +229,43 @@ public final class Controller {
         guard let profile = activeProfile() else { return nil }
         let cpu = smc.maxTemperature(group: .cpu)
         let gpu = smc.maxTemperature(group: .gpu)
-        guard let decision = ControlEngine.command(
-            profile: profile, cpuTemp: cpu, gpuTemp: gpu,
-            fanMin: 0, fanMax: ProfileValidator.rpmHardMax, lastTarget: nil
-        ) else {
-            let message = "profile '\(profile.name)' has no readable temperature source"
-            for fan in smc.allFans() { fanErrors[fan.id] = message }
-            return message
+        let selectedSensorTemp = profile.sensorKey.flatMap { selectedKey in
+            SensorGroup.allCases
+                .flatMap { smc.sensorReadings(group: $0) }
+                .first { $0.key == selectedKey }?.tempC
         }
 
         var firstError: String?
         let now = Date()
         let fans = smc.allFans()
         guard !fans.isEmpty else { return "no fans reported by SMC" }
+        let sourceAvailable: Bool
+        if profile.sensorKey != nil {
+            sourceAvailable = selectedSensorTemp != nil
+        } else {
+            switch profile.sensor {
+            case .cpu: sourceAvailable = cpu != nil
+            case .gpu: sourceAvailable = gpu != nil
+            case .max: sourceAvailable = cpu != nil || gpu != nil
+            }
+        }
+        guard sourceAvailable else {
+            let source = profile.sensorKey.map { "sensor '\($0)'" } ?? "temperature source"
+            return failSafeForUnavailableSource(
+                "profile '\(profile.name)' has no readable \(source); restored macOS automatic control"
+            )
+        }
+
         for fan in fans {
-            let rpm = max(fan.minRPM, min(decision.rpm, fan.maxRPM))
+            guard let decision = ControlEngine.command(
+                profile: profile, cpuTemp: cpu, gpuTemp: gpu, sensorTemp: selectedSensorTemp,
+                fanID: fan.id, fanMin: fan.minRPM, fanMax: fan.maxRPM, lastTarget: nil
+            ) else {
+                return failSafeForUnavailableSource(
+                    "profile '\(profile.name)' has no readable temperature source; restored macOS automatic control"
+                )
+            }
+            let rpm = decision.rpm
             desiredTargets[fan.id] = rpm
             let shouldWrite = WriteGate.shouldWrite(
                 rpm: rpm, lastTarget: lastTargets[fan.id], observedTarget: fan.targetRPM,
@@ -264,6 +286,17 @@ public final class Controller {
             }
         }
         return firstError
+    }
+
+    private func failSafeForUnavailableSource(_ message: String) -> String {
+        desiredTargets.removeAll()
+        lastTargets.removeAll()
+        lastWriteAt.removeAll()
+        confirmedAt.removeAll()
+        let restoreError = reassertAutomaticModeIfNeeded()
+        let reportedMessage = restoreError.map { "\(message); \($0)" } ?? message
+        for fan in smc.allFans() { fanErrors[fan.id] = reportedMessage }
+        return reportedMessage
     }
 
     private func reassertAutomaticModeIfNeeded() -> String? {

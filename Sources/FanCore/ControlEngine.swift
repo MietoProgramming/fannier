@@ -35,9 +35,10 @@ public enum WriteGate {
 public enum ControlEngine {
     /// Interpolate the profile curve for `tempC`.
     /// - Returns nothing when the curve is unusable (< 2 points).
-    public static func targetRPM(profile: FanProfile, tempC: Double) -> Int? {
-        guard profile.curve.count >= 2 else { return nil }
-        let points = profile.curve.sorted { $0.tempC < $1.tempC }
+    public static func targetRPM(profile: FanProfile, tempC: Double, fanID: Int? = nil) -> Int? {
+        let curve = profile.curve(forFanID: fanID)
+        guard curve.count >= 2 else { return nil }
+        let points = curve.sorted { $0.tempC < $1.tempC }
         if tempC <= points.first!.tempC { return points.first!.rpm }
         if tempC >= points.last!.tempC { return points.last!.rpm }
         for i in 1 ..< points.count {
@@ -55,20 +56,28 @@ public enum ControlEngine {
     public static func command(
         profile: FanProfile?,
         cpuTemp: Double?, gpuTemp: Double?,
+        sensorTemp: Double? = nil, fanID: Int? = nil,
         fanMin: Int, fanMax: Int,
         lastTarget: Int?
     ) -> (rpm: Int, emergency: Bool)? {
         guard let profile else { return nil }
         let input: Double?
-        switch profile.sensor {
-        case .cpu: input = cpuTemp
-        case .gpu: input = gpuTemp
-        case .max: input = [cpuTemp, gpuTemp].compactMap { $0 }.max()
+        if profile.sensorKey != nil {
+            input = sensorTemp
+        } else {
+            switch profile.sensor {
+            case .cpu: input = cpuTemp
+            case .gpu: input = gpuTemp
+            case .max: input = [cpuTemp, gpuTemp].compactMap { $0 }.max()
+            }
         }
         guard let temp = input else { return nil }
 
-        var rpm = targetRPM(profile: profile, tempC: temp) ?? fanMin
-        let emergency = temp >= profile.emergencyTempC
+        var rpm = targetRPM(profile: profile, tempC: temp, fanID: fanID) ?? fanMin
+        let emergency = [cpuTemp, gpuTemp, sensorTemp]
+            .compactMap { $0 }
+            .max()
+            .map { $0 >= profile.emergencyTempC } ?? false
         if emergency { rpm = fanMax }
 
         rpm = max(fanMin, min(rpm, fanMax))

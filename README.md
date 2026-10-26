@@ -4,9 +4,9 @@ Menu-bar fan control for Apple Silicon Macs with **temperature-driven, switchabl
 
 Monitors CPU/GPU die temperatures and fans via the SMC, and (through a tiny
 root daemon) forces fan targets according to the active profile curve.
-Developed and verified on MacBook Pro M5 Max / macOS 27, using the SMC write
-path (`F<id>md` mode + `F<id>Tg` float target, no `Ftst` unlock) supported on
-M5+ machines.
+Temperature reads and fan-target writes have been validated on MacBook Pro M5
+Max (`Mac17,7`) / macOS 27.0.1. Other Mac models and macOS versions remain
+unvalidated; run the read-only hardware report before considering control.
 
 ## ⚠️ Safety
 
@@ -44,12 +44,12 @@ this software, or from being unable to use it.
 
 ```
 Sources/FanSMC/        SMC user-client: reads (any user), writes (root)
-Sources/FanCore/       profiles, engine (pure), controller, daemon protocol
+Sources/FanCore/       profiles, engine (pure), controller, diagnostics, protocol
 Sources/Fannierd/      root LaunchDaemon: unix-socket JSON API + apply loop
 Sources/FannierApp/    menu bar app (temps in the bar, profiles in the menu)
 Sources/fanctl/        small CLI (status / use / manual / auto / read)
 Tests/FanCoreTests/    curve/hysteresis/clamping unit tests
-scripts/make-app.sh          package fannier.app + fannier-0.2.2.dmg (ad-hoc signed)
+scripts/make-app.sh          package fannier.app + 0.3.0 DMG/ZIP (ad-hoc by default)
 scripts/install-daemon.sh    app-bundle installer (no build): copies fanierd/fanctl,
                              bootstraps the root LaunchDaemon
 scripts/install-launchd.sh   dev install: builds release, installs, bootstraps
@@ -73,15 +73,20 @@ open build/fannier.app    # or drag from the DMG into /Applications
 First run: the menu bar fan icon appears (no Dock icon). Choose
 **“Install / restart fanierd (sudo)…”** once — it prompts for the admin
 password, copies the bundled `fanierd` + `fanctl` into `/usr/local/bin`,
-and bootstraps the KeepAlive root LaunchDaemon. Profile switching works
-immediately afterwards.
+and bootstraps the KeepAlive root LaunchDaemon. Use **Open at Login** in the
+menu if you want the app to start automatically; macOS may ask you to approve
+it in Login Items.
 
-The app is **ad-hoc signed** (fine for local use). Distributing it to other
-Macs requires a Developer ID signature + notarization.
+The app is ad-hoc signed by default for local use. Set
+`FANNIER_SIGNING_IDENTITY` to a Developer ID Application identity to sign the
+app and bundled executables with Hardened Runtime. Set `FANNIER_NOTARY_PROFILE`
+to an existing `notarytool` Keychain profile and `FANNIER_NOTARIZE=1` to submit
+and staple the app and DMG. These variables are required before notarization;
+the build script stops before upload if they are missing.
 
-The status bar shows the hottest CPU/GPU reading; the menu lists profile
-radio buttons (active one checked), current fan RPMs/min/max, and the
-install/restart item.
+The status bar shows the hottest CPU/GPU reading; the menu lists profiles,
+current fan RPMs/min/max, macOS automatic control, **Hardware diagnostics…**,
+the optional Login Item, and the daemon installer.
 
 ## Profiles — on-screen editor (no JSON required)
 
@@ -89,12 +94,13 @@ Menu bar icon → **Edit profiles…** (⌘E):
 
 - **Profile list** on the left — built-ins plus your own; add / Duplicate /
   delete custom ones, the active profile is marked.
-- **Temperature source** per profile: CPU / GPU / Max(CPU,GPU) — plus the
-  live *source of temps*: the hottest SMC key of each group (e.g. `Tp0C`)
-  and a disclosure list of every sensor feeding the group.
+- **Temperature source** per profile: CPU / GPU / Max(CPU,GPU) or one exact
+  sensor key (e.g. `Tp00`) — plus live readings for every listed sensor.
 - **Curve editor** with any number of steps (°C → RPM): add, remove, sort;
-  live chart with a marker for the current input temperature and a
-  "now: 54.3 °C → 3800 rpm" readout of the resulting target.
+  live chart with a marker for the current input temperature and a readout of
+  the selected fan's resulting target.
+- **Per-fan curves:** edit a shared default and optional overrides for
+  individual fans. Fans without an override keep using the shared curve.
 - **Advanced**: hysteresis (rewrite suppression) and emergency temperature
   (kept ≤ 100 °C by validation).
 
@@ -117,6 +123,8 @@ CLI (`fanctl`) for quick checks and scripting:
 ```sh
 .build/debug/fanctl status        # temps + fans (daemon first, else direct SMC)
 .build/debug/fanctl sensors       # per-key temps + hottest ("source") per group
+.build/debug/fanctl diagnostics   # read-only model, SMC key and sensor report
+.build/debug/fanctl diagnostics --json
 .build/debug/fanctl read Tp0U     # raw SMC key
 .build/debug/fanctl use Performance    # via fanierd
 sudo .build/debug/fanctl manual 0 4000 # forced RPM (root + fanierd)
@@ -141,6 +149,16 @@ JSON `{"cmd": …}` over `/var/run/fannier.sock`, one line in, one line out:
 
 (encoding via `DaemonRequest` Codable enum; `FANNIER_SOCKET` and
 `FANNIER_PROFILES_DIR` env vars override socket/config paths for testing)
+
+Profiles remain backward-compatible with the original `sensor` and `curve`
+fields. `sensorKey` optionally selects one exact four-byte SMC key; `fanCurves`
+stores per-fan overrides, each of which falls back to the shared `curve` when
+absent. If the selected sensor is unavailable, the daemon restores macOS
+automatic fan control and reports the missing source until it becomes readable.
+
+See [hardware compatibility](docs/hardware-compatibility.md) for the tested
+configuration and the distinction between a detected write-key layout and a
+confirmed hardware write.
 
 ## License
 

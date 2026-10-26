@@ -11,6 +11,7 @@ func help() {
     Usage: fanctl <command>
       status          temps + fans + active profile (daemon first, else direct)
       sensors         live per-sensor readings + hottest key per group
+      diagnostics     read-only hardware compatibility report (--json optional)
       profiles        profile names known to fanierd
       use <name>      switch active profile (via fanierd)
       manual <id> <rpm>   force RPM (via fanierd)
@@ -81,6 +82,23 @@ case "sensors":
                 sensors: readings.map { SensorReading(key: $0.key, tempC: $0.tempC) }
             ))
         }
+    }
+case "diagnostics":
+    guard let smc = try? SMCConnection() else {
+        FileHandle.standardError.write(Data("SMC unavailable\n".utf8))
+        exit(1)
+    }
+    let report = smc.hardwareDiagnostics()
+    if args.dropFirst().contains("--json") {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        guard let data = try? encoder.encode(report), let json = String(data: data, encoding: .utf8) else {
+            FileHandle.standardError.write(Data("Could not encode diagnostics report\n".utf8))
+            exit(1)
+        }
+        print(json)
+    } else {
+        print(report.formattedText)
     }
 case "profiles":
     guard let response = client.send(.profiles) else { print("fanierd offline"); exit(2) }

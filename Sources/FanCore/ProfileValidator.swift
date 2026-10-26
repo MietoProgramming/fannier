@@ -34,7 +34,51 @@ public enum ProfileValidator {
             return .failure(ProfileValidationError("profile name is longer than \(maxNameLength) characters"))
         }
 
-        let clamped = profile.curve.map {
+        if let sensorKey = profile.sensorKey {
+            let isPrintableFourByteKey = sensorKey.utf8.count == 4
+                && sensorKey.utf8.allSatisfy { (0x21 ... 0x7e).contains($0) }
+            guard isPrintableFourByteKey else {
+                return .failure(ProfileValidationError("sensor key must contain exactly 4 printable ASCII bytes"))
+            }
+        }
+
+        switch sanitizeCurve(profile.curve, label: "curve") {
+        case .failure(let error): return .failure(error)
+        case .success(let curve): clean.curve = curve
+        }
+
+        var seenFanIDs = Set<Int>()
+        var cleanFanCurves: [FanProfile.FanCurve] = []
+        for fanCurve in profile.fanCurves ?? [] {
+            guard fanCurve.fanID >= 0 else {
+                return .failure(ProfileValidationError("fan ID must be non-negative"))
+            }
+            guard seenFanIDs.insert(fanCurve.fanID).inserted else {
+                return .failure(ProfileValidationError("duplicate curve for fan \(fanCurve.fanID)"))
+            }
+            switch sanitizeCurve(fanCurve.curve, label: "fan \(fanCurve.fanID) curve") {
+            case .failure(let error): return .failure(error)
+            case .success(let curve):
+                cleanFanCurves.append(.init(fanID: fanCurve.fanID, curve: curve))
+            }
+        }
+
+        clean.fanCurves = cleanFanCurves.isEmpty ? nil : cleanFanCurves.sorted { $0.fanID < $1.fanID }
+        clean.hysteresisRPM = min(max(profile.hysteresisRPM, hysteresisRange.lowerBound),
+                                  hysteresisRange.upperBound)
+        clean.emergencyTempC = min(max(profile.emergencyTempC, emergencyRange.lowerBound),
+                                   emergencyRange.upperBound)
+        return .success(clean)
+    }
+
+    private static func sanitizeCurve(
+        _ curve: [FanProfile.CurvePoint], label: String
+    ) -> Result<[FanProfile.CurvePoint], ProfileValidationError> {
+        guard curve.allSatisfy({ $0.tempC.isFinite }) else {
+            return .failure(ProfileValidationError("\(label) contains a non-finite temperature"))
+        }
+
+        let clamped = curve.map {
             FanProfile.CurvePoint(
                 tempC: min(max($0.tempC, tempRange.lowerBound), tempRange.upperBound),
                 rpm: min(max($0.rpm, 0), rpmHardMax)
@@ -51,14 +95,8 @@ public enum ProfileValidator {
             }
         }
         guard deduped.count >= 2 else {
-            return .failure(ProfileValidationError("curve needs at least 2 steps with distinct temperatures"))
+            return .failure(ProfileValidationError("\(label) needs at least 2 steps with distinct temperatures"))
         }
-
-        clean.curve = deduped
-        clean.hysteresisRPM = min(max(profile.hysteresisRPM, hysteresisRange.lowerBound),
-                                  hysteresisRange.upperBound)
-        clean.emergencyTempC = min(max(profile.emergencyTempC, emergencyRange.lowerBound),
-                                   emergencyRange.upperBound)
-        return .success(clean)
+        return .success(deduped)
     }
 }

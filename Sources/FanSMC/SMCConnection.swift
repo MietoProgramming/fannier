@@ -106,7 +106,7 @@ public final class SMCConnection {
     }
 
     /// `(type, size)` of a key, or nil when the key does not exist on this machine.
-    func keyInfo(_ name: String) -> (type: String, size: Int)? {
+    public func keyInfo(_ name: String) -> (type: String, size: Int)? {
         lock.lock(); defer { lock.unlock() }
         let code = FourCharCode(fromString: name)
         if let cached = keyInfoCache[code] {

@@ -11,9 +11,11 @@ final class ProfileEditorModel: ObservableObject {
     @Published var draft = FanProfile(name: "", sensor: .max, curve: [])
     @Published var hasDraft = false
     @Published var sensors: [SensorSource] = []
+    @Published var fans: [MachineStatus.FanState] = []
     @Published var activeName: String?
     @Published var fanMin = 0
     @Published var fanMax = 0
+    @Published private var editingFanID: Int?
     @Published var online = false
     @Published var validationError: String?
     @Published var message: String?
@@ -48,10 +50,8 @@ final class ProfileEditorModel: ObservableObject {
         refreshProfiles()
         if let status = client.send(.status)?.status {
             activeName = status.activeProfile
-            if let fan = status.fans.first {
-                fanMin = fan.minRPM
-                fanMax = fan.maxRPM
-            }
+            fans = status.fans
+            updateFanBounds()
         }
         tick()
     }
@@ -75,6 +75,8 @@ final class ProfileEditorModel: ObservableObject {
         tickCount += 1
         if tickCount % 4 == 0, let status = client.send(.status)?.status {
             activeName = status.activeProfile
+            fans = status.fans
+            updateFanBounds()
         }
     }
 
@@ -85,6 +87,8 @@ final class ProfileEditorModel: ObservableObject {
         selectedName = name
         draft = profile
         originalDraft = profile
+        editingFanID = nil
+        updateFanBounds()
         hasDraft = true
         validationError = nil
         message = nil
@@ -103,6 +107,8 @@ final class ProfileEditorModel: ObservableObject {
         selectedName = nil
         draft = profile
         originalDraft = nil
+        editingFanID = nil
+        updateFanBounds()
         hasDraft = true
         validationError = nil
         message = "new profile — edit and save"
@@ -146,21 +152,86 @@ final class ProfileEditorModel: ObservableObject {
     }
 
     func addStep() {
-        if let last = draft.curve.max(by: { $0.tempC < $1.tempC }) {
-            draft.curve.append(.init(tempC: min(last.tempC + 5, 110), rpm: last.rpm))
+        var curve = editingCurve
+        if let last = curve.max(by: { $0.tempC < $1.tempC }) {
+            curve.append(.init(tempC: min(last.tempC + 5, 110), rpm: last.rpm))
         } else {
-            draft.curve.append(.init(tempC: 60, rpm: max(fanMin, 2_400)))
+            curve.append(.init(tempC: 60, rpm: max(fanMin, 2_400)))
         }
+        editingCurve = curve
         message = nil
     }
 
     func removeStep(_ index: Int) {
-        guard draft.curve.indices.contains(index) else { return }
-        draft.curve.remove(at: index)
+        var curve = editingCurve
+        guard curve.indices.contains(index) else { return }
+        curve.remove(at: index)
+        editingCurve = curve
     }
 
     func sortSteps() {
-        draft.curve.sort { $0.tempC < $1.tempC }
+        editingCurve = editingCurve.sorted { $0.tempC < $1.tempC }
+    }
+
+    var curveFanSelection: Int? {
+        get { editingFanID }
+        set {
+            editingFanID = newValue
+            updateFanBounds()
+        }
+    }
+
+    var editableFanIDs: [Int] {
+        Set(fans.map(\.id) + (draft.fanCurves ?? []).map(\.fanID)).sorted()
+    }
+
+    func fanLabel(_ id: Int) -> String {
+        fans.first(where: { $0.id == id }).map { "\($0.name) (F\(id))" } ?? "Fan #\(id) (not detected)"
+    }
+
+    var hasEditingFanOverride: Bool {
+        guard let editingFanID else { return false }
+        return draft.fanCurves?.contains(where: { $0.fanID == editingFanID }) == true
+    }
+
+    var editingCurve: [FanProfile.CurvePoint] {
+        get { draft.curve(forFanID: editingFanID) }
+        set {
+            guard let editingFanID else {
+                draft.curve = newValue
+                return
+            }
+            var overrides = draft.fanCurves ?? []
+            if let index = overrides.firstIndex(where: { $0.fanID == editingFanID }) {
+                overrides[index].curve = newValue
+            } else {
+                overrides.append(.init(fanID: editingFanID, curve: newValue))
+            }
+            draft.fanCurves = overrides.sorted { $0.fanID < $1.fanID }
+        }
+    }
+
+    func useSharedCurveForSelectedFan() {
+        guard let editingFanID else { return }
+        var overrides = draft.fanCurves ?? []
+        overrides.removeAll { $0.fanID == editingFanID }
+        draft.fanCurves = overrides.isEmpty ? nil : overrides
+    }
+
+    private func updateFanBounds() {
+        if let editingFanID {
+            guard let fan = fans.first(where: { $0.id == editingFanID }) else {
+                fanMin = 0
+                fanMax = 0
+                return
+            }
+            fanMin = fan.minRPM
+            fanMax = fan.maxRPM
+            return
+        }
+        let fan = fans.first
+        fanMin = fan?.minRPM ?? 0
+        fanMax = fan?.maxRPM ?? 0
     }
 
     func revert() {
@@ -238,7 +309,30 @@ final class ProfileEditorModel: ObservableObject {
     var cpuSource: SensorSource? { sensors.first { $0.group == "cpu" } }
     var gpuSource: SensorSource? { sensors.first { $0.group == "gpu" } }
 
+    var sourceSelection: String {
+        get { draft.sensorKey.map { "key:\($0)" } ?? "group:\(draft.sensor.rawValue)" }
+        set {
+            if newValue.hasPrefix("key:") {
+                let key = String(newValue.dropFirst("key:".count))
+                draft.sensorKey = key
+                if cpuSource?.sensors.contains(where: { $0.key == key }) == true {
+                    draft.sensor = .cpu
+                } else if gpuSource?.sensors.contains(where: { $0.key == key }) == true {
+                    draft.sensor = .gpu
+                }
+            } else if newValue.hasPrefix("group:"),
+                      let choice = FanProfile.SensorChoice(rawValue: String(newValue.dropFirst("group:".count))) {
+                draft.sensorKey = nil
+                draft.sensor = choice
+            }
+            message = nil
+        }
+    }
+
     var currentInputTemp: Double? {
+        if let key = draft.sensorKey {
+            return sensors.flatMap(\.sensors).first(where: { $0.key == key })?.tempC
+        }
         let cpu = cpuSource?.hotC
         let gpu = gpuSource?.hotC
         switch draft.sensor {
@@ -250,7 +344,7 @@ final class ProfileEditorModel: ObservableObject {
 
     var currentTargetRPM: Int? {
         guard let temp = currentInputTemp else { return nil }
-        guard let rpm = ControlEngine.targetRPM(profile: draft, tempC: temp) else { return nil }
+        guard let rpm = ControlEngine.targetRPM(profile: draft, tempC: temp, fanID: editingFanID) else { return nil }
         let lo = fanMin > 0 ? fanMin : 0
         let hi = fanMax > 0 ? fanMax : ProfileValidator.rpmHardMax
         return min(max(rpm, lo), hi)
@@ -385,12 +479,26 @@ struct ProfileEditorView: View {
         GroupBox("Temperature source") {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Picker("Drives the curve:", selection: $model.draft.sensor) {
-                        ForEach(FanProfile.SensorChoice.allCases, id: \.self) { choice in
-                            Text(choice.label).tag(choice)
+                    Picker("Drives the curve:", selection: $model.sourceSelection) {
+                        Section("Groups") {
+                            ForEach(FanProfile.SensorChoice.allCases, id: \.self) { choice in
+                                Text(choice.label).tag("group:\(choice.rawValue)")
+                            }
+                        }
+                        ForEach(model.sensors, id: \.group) { source in
+                            Section(source.group.uppercased()) {
+                                ForEach(source.sensors, id: \.key) { reading in
+                                    Text("\(reading.key) — \(String(format: "%.1f", reading.tempC)) °C")
+                                        .tag("key:\(reading.key)")
+                                }
+                            }
+                        }
+                        if let missingKey = model.draft.sensorKey,
+                           !model.sensors.flatMap(\.sensors).contains(where: { $0.key == missingKey }) {
+                            Text("Missing sensor: \(missingKey)").tag("key:\(missingKey)")
                         }
                     }
-                    .pickerStyle(.segmented)
+                    .pickerStyle(.menu)
                     .frame(width: 320)
                     Spacer()
                     if let temp = model.currentInputTemp, let rpm = model.currentTargetRPM {
@@ -398,6 +506,11 @@ struct ProfileEditorView: View {
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
+                }
+                if model.draft.sensorKey != nil && model.currentInputTemp == nil {
+                    Text("The selected sensor is unavailable. The daemon restores macOS automatic control until it returns.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
                 sensorLines
                 DisclosureGroup("All sensors (\(model.cpuSource?.sensors.count ?? 0) CPU, \(model.gpuSource?.sensors.count ?? 0) GPU)") {
@@ -450,8 +563,26 @@ struct ProfileEditorView: View {
     private var curveSection: some View {
         GroupBox("Curve — temperature → fan RPM") {
             VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Picker("Curve for:", selection: $model.curveFanSelection) {
+                        Text("Shared default").tag(Optional<Int>.none)
+                        ForEach(model.editableFanIDs, id: \.self) { fanID in
+                            Text(model.fanLabel(fanID)).tag(Optional(fanID))
+                        }
+                    }
+                    .frame(maxWidth: 260)
+                    if model.curveFanSelection != nil {
+                        Text(model.hasEditingFanOverride ? "per-fan override" : "using shared curve until edited")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        if model.hasEditingFanOverride {
+                            Button("Use shared curve") { model.useSharedCurveForSelectedFan() }
+                        }
+                    }
+                }
                 HStack(spacing: 10) {
-                    Text("\(model.draft.curve.count) steps")
+                    Text("\(model.editingCurve.count) steps")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     if model.fanMin > 0 || model.fanMax > 0 {
@@ -467,7 +598,7 @@ struct ProfileEditorView: View {
                         Label("Add step", systemImage: "plus")
                     }
                 }
-                ForEach(model.draft.curve.indices, id: \.self) { index in
+                ForEach(model.editingCurve.indices, id: \.self) { index in
                     HStack(spacing: 8) {
                         Text("#\(index + 1)")
                             .font(.caption)
@@ -476,14 +607,14 @@ struct ProfileEditorView: View {
                         Text("below")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        TextField("temp", value: $model.draft.curve[index].tempC, format: .number)
+                        TextField("temp", value: $model.editingCurve[index].tempC, format: .number)
                             .textFieldStyle(.roundedBorder)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 64)
                         Text("°C →")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        TextField("rpm", value: $model.draft.curve[index].rpm, format: .number)
+                        TextField("rpm", value: $model.editingCurve[index].rpm, format: .number)
                             .textFieldStyle(.roundedBorder)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 76)
@@ -499,7 +630,7 @@ struct ProfileEditorView: View {
                     }
                 }
                 CurveChart(
-                    curve: model.draft.curve,
+                    curve: model.editingCurve,
                     currentTemp: model.currentInputTemp,
                     fanMin: model.fanMin,
                     fanMax: model.fanMax

@@ -11,12 +11,16 @@ public struct FanProfile: Codable, Equatable, Sendable, Identifiable {
     public var name: String
     /// Which temperature drives the curve.
     public var sensor: SensorChoice
+    /// Optional exact SMC temperature key. When set, this overrides `sensor`.
+    public var sensorKey: String?
     /// (°C, RPM) anchors. Must contain at least two points.
     public var curve: [CurvePoint]
+    /// Optional per-fan overrides; fans without an override use `curve`.
+    public var fanCurves: [FanCurve]?
     /// Writes only happen when the new target differs by at least this many RPM
     /// from the last applied value (reduces SMC chatter).
     public var hysteresisRPM: Int
-    /// When any monitored temp reaches this, fans jump to max immediately.
+    /// When any monitored CPU/GPU temperature reaches this, fans jump to max.
     public var emergencyTempC: Double
 
     public struct CurvePoint: Codable, Equatable, Sendable {
@@ -26,6 +30,17 @@ public struct FanProfile: Codable, Equatable, Sendable, Identifiable {
         public init(tempC: Double, rpm: Int) {
             self.tempC = tempC
             self.rpm = rpm
+        }
+    }
+
+    public struct FanCurve: Codable, Equatable, Sendable, Identifiable {
+        public var id: Int { fanID }
+        public var fanID: Int
+        public var curve: [CurvePoint]
+
+        public init(fanID: Int, curve: [CurvePoint]) {
+            self.fanID = fanID
+            self.curve = curve
         }
     }
 
@@ -45,13 +60,24 @@ public struct FanProfile: Codable, Equatable, Sendable, Identifiable {
 
     public init(
         name: String, sensor: SensorChoice, curve: [CurvePoint],
-        hysteresisRPM: Int = 75, emergencyTempC: Double = 95
+        hysteresisRPM: Int = 75, emergencyTempC: Double = 95,
+        sensorKey: String? = nil, fanCurves: [FanCurve]? = nil
     ) {
         self.name = name
         self.sensor = sensor
+        self.sensorKey = sensorKey
         self.curve = curve
+        self.fanCurves = fanCurves
         self.hysteresisRPM = hysteresisRPM
         self.emergencyTempC = emergencyTempC
+    }
+
+    public func curve(forFanID fanID: Int?) -> [CurvePoint] {
+        guard let fanID,
+              let override = fanCurves?.first(where: { $0.fanID == fanID }) else {
+            return curve
+        }
+        return override.curve
     }
 
     /// Built-in profiles.
