@@ -49,7 +49,7 @@ Sources/Fannierd/      root LaunchDaemon: unix-socket JSON API + apply loop
 Sources/FannierApp/    menu bar app (temps in the bar, profiles in the menu)
 Sources/fanctl/        small CLI (status / use / manual / auto / read)
 Tests/FanCoreTests/    curve/hysteresis/clamping unit tests
-scripts/make-app.sh          package fannier.app + 0.3.0 DMG/ZIP (ad-hoc by default)
+scripts/make-app.sh          package fannier.app + 0.3.1 DMG/ZIP (ad-hoc by default)
 scripts/install-daemon.sh    app-bundle installer (no build): copies fanierd/fanctl,
                              bootstraps the root LaunchDaemon
 scripts/install-launchd.sh   dev install: builds release, installs, bootstraps
@@ -66,16 +66,22 @@ GUI falls back to `~/Library/Application Support/fannier`.
 ## Install as an app (recommended)
 
 ```sh
-./scripts/make-app.sh     # → build/fannier.app + build/fannier-0.2.2.dmg
+./scripts/make-app.sh     # → build/fannier.app + build/fannier-0.3.1.dmg
 open build/fannier.app    # or drag from the DMG into /Applications
 ```
 
 First run: the menu bar fan icon appears (no Dock icon). Choose
 **“Install / restart fanierd (sudo)…”** once — it prompts for the admin
 password, copies the bundled `fanierd` + `fanctl` into `/usr/local/bin`,
-and bootstraps the KeepAlive root LaunchDaemon. Use **Open at Login** in the
-menu if you want the app to start automatically; macOS may ask you to approve
-it in Login Items.
+and bootstraps the KeepAlive root LaunchDaemon. To start the app automatically,
+choose **Settings…** (⌘,) → **Open at Login**. fannier will open when you log in,
+including after restarting your Mac. The same switch is also available directly
+in the menu. This is optional and stays off until you enable it.
+
+Settings show the current macOS Login Item status. If approval is needed, click
+**Open Login Items…** and allow fannier in System Settings. You can uncheck
+**Open at Login** to cancel registration or turn automatic startup off. Run the
+installed app from `/Applications` when configuring this option.
 
 The app is ad-hoc signed by default for local use. Set
 `FANNIER_SIGNING_IDENTITY` to a Developer ID Application identity to sign the

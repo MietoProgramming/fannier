@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var store: ProfileStore?
     private var editorWindow: NSWindow?
     private var editorModel: ProfileEditorModel?
+    private var settingsWindow: NSWindow?
+    private let loginSettings = LaunchAtLoginSettings()
 
     private static let maxProfileSlots = 6
     private static let maxFanSlots = 4
@@ -126,6 +128,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editProfiles.target = self
         menu.addItem(editProfiles)
 
+        let settings = NSMenuItem(
+            title: "Settings…", action: #selector(openSettings), keyEquivalent: ","
+        )
+        settings.target = self
+        menu.addItem(settings)
+
         let loginItem = NSMenuItem(
             title: "Open at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: ""
         )
@@ -227,8 +235,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
 
+        loginSettings.refresh()
         if let loginItem = menu.item(withTag: Self.loginItemTag) {
-            switch SMAppService.mainApp.status {
+            switch loginSettings.status {
             case .enabled:
                 loginItem.title = "Open at Login"
                 loginItem.state = .on
@@ -349,42 +358,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func toggleLaunchAtLogin() {
-        let service = SMAppService.mainApp
-        do {
-            switch service.status {
-            case .enabled:
-                try service.unregister()
-            case .notRegistered:
-                try service.register()
-            case .requiresApproval:
-                openLoginItemsForApproval()
-                return
-            case .notFound:
-                showActivationError("Launch at Login is available when fannier runs from an installed .app bundle.")
-                return
-            @unknown default:
-                showActivationError("macOS returned an unrecognized Login Item status.")
-                return
-            }
-        } catch {
-            showActivationError("Could not update Launch at Login: \(error.localizedDescription)")
-        }
-
-        if service.status == .requiresApproval {
-            openLoginItemsForApproval()
-        }
+        loginSettings.toggleFromMenu()
         updateMenuItems()
     }
 
-    private func openLoginItemsForApproval() {
-        let alert = NSAlert()
-        alert.messageText = "Approve fannier in Login Items"
-        alert.informativeText = "macOS registered fannier but requires your approval in System Settings → General → Login Items."
-        alert.addButton(withTitle: "Open Login Items")
-        alert.addButton(withTitle: "Later")
-        if alert.runModal() == .alertFirstButtonReturn {
-            SMAppService.openSystemSettingsLoginItems()
+    @objc private func openSettings() {
+        loginSettings.refresh()
+        if settingsWindow == nil {
+            let hosting = NSHostingController(rootView: SettingsView(loginItem: loginSettings))
+            let window = NSWindow(contentViewController: hosting)
+            window.title = "fannier settings"
+            window.styleMask = [.titled, .closable]
+            window.isReleasedWhenClosed = false
+            window.center()
+            settingsWindow = window
         }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
     }
 
     @objc private func openConfigFile() {

@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-VERSION="${FANNIER_VERSION:-0.3.0}"
+VERSION="${FANNIER_VERSION:-0.3.1}"
 APP_ID="org.kamil.fannier.app"
 BUNDLE_NAME="fannier"
 SIGNING_IDENTITY="${FANNIER_SIGNING_IDENTITY:--}"
